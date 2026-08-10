@@ -17,6 +17,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from meta_harness.config import load_meta_harness_config
+from meta_harness.full_search_v3_preparation import (
+    FullSearchV3PreparationError,
+    prepare_full_search_v3,
+)
 from meta_harness.schemas import canonical_json
 from meta_harness.hard_search import (
     build_hard_search_manifest,
@@ -32,16 +36,19 @@ from utils.dataset_adapters import get_dataset_adapter
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Prepare paper-disjoint splits plus a deterministic hard-search "
-            "set from offline baseline results."
-        ),
+        description="Prepare offline Meta-Harness data under an explicit protocol.",
     )
-    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument(
+        "--protocol",
+        choices=("legacy", "sciver_full_search_v3"),
+        default="legacy",
+        help="legacy preserves the staged preparation interface; V3 is isolated.",
+    )
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--dataset-path", type=Path, required=True)
     parser.add_argument("--evidence-dir", type=Path)
-    parser.add_argument("--split-manifest", type=Path, required=True)
-    parser.add_argument("--validation-output", type=Path, required=True)
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--validation-output", type=Path)
     parser.add_argument(
         "--reserved-search-output",
         type=Path,
@@ -57,6 +64,21 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--hard-search-manifest", type=Path)
     parser.add_argument("--search-output", type=Path)
+    parser.add_argument(
+        "--v3-config",
+        type=Path,
+        help="optional complete locked sciver_full_search_v3 configuration JSON",
+    )
+    parser.add_argument(
+        "--v3-private-dir",
+        type=Path,
+        help="trusted-only directory for the authoritative V3 private manifest",
+    )
+    parser.add_argument(
+        "--v3-search-dir",
+        type=Path,
+        help="SEARCH-facing directory for the safe manifest and ordered records",
+    )
     return parser
 
 
@@ -66,7 +88,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def cli(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(argv)
+    if arguments.protocol == "sciver_full_search_v3":
+        return _v3_cli(arguments)
     try:
+        _require_legacy_arguments(arguments)
         config = load_meta_harness_config(arguments.config)
         samples = get_dataset_adapter("SciVer").load(
             arguments.dataset_path,
@@ -186,6 +211,70 @@ def cli(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def _v3_cli(arguments: argparse.Namespace) -> int:
+    if arguments.v3_private_dir is None or arguments.v3_search_dir is None:
+        print(
+            "error: --v3-private-dir and --v3-search-dir are required for sciver_full_search_v3",
+            file=sys.stderr,
+        )
+        return 1
+    if any(
+        value is not None
+        for value in (
+            arguments.config,
+            arguments.split_manifest,
+            arguments.validation_output,
+            arguments.reserved_search_output,
+            arguments.baseline_search_results,
+            arguments.hard_search_manifest,
+            arguments.search_output,
+            arguments.evidence_dir,
+        )
+    ):
+        print(
+            "error: legacy preparation options cannot be combined with sciver_full_search_v3",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        artifacts = prepare_full_search_v3(
+            source_path=arguments.dataset_path,
+            private_directory=arguments.v3_private_dir,
+            search_directory=arguments.v3_search_dir,
+            config_path=arguments.v3_config,
+        )
+        print(json.dumps(artifacts.summary, sort_keys=True, indent=2))
+        return 0
+    except (OSError, ValueError, FullSearchV3PreparationError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+def _require_legacy_arguments(arguments: argparse.Namespace) -> None:
+    missing = [
+        flag
+        for flag, value in (
+            ("--config", arguments.config),
+            ("--split-manifest", arguments.split_manifest),
+            ("--validation-output", arguments.validation_output),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "legacy preparation requires " + ", ".join(missing)
+        )
+    if any(
+        value is not None
+        for value in (
+            arguments.v3_config,
+            arguments.v3_private_dir,
+            arguments.v3_search_dir,
+        )
+    ):
+        raise ValueError("V3 preparation options require --protocol sciver_full_search_v3")
 
 
 def _atomic_create_or_verify_json(path: Path, value: Any) -> None:
