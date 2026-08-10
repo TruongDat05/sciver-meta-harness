@@ -1,0 +1,5 @@
+vllm==0.9.0.1
+openai==1.55.0
+requests>=2.31.0,<3
+Pillow>=10,<12
+python-dotenv>=1,<2

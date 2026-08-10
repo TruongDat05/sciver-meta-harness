@@ -1,0 +1,12 @@
+interface:
+  display_name: Meta-Harness
+  short_description: Design, implement, and run prompt-only searches
+  default_prompt: Use $meta-harness to inspect and improve this Meta-Harness workflow
+    safely.
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

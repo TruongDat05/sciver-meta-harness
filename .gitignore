@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
+.env
+.env.*
+!.env.example
+
+# Local Meta-Harness datasets, search state, traces, and final-test artifacts.
+workspace/meta_harness/
+.venv/
+data/
+pipeline_meta_harness.mdpipeline_meta_harness.md

@@ -1,0 +1,29 @@
+{
+  "model": "gemma-4-31B-it",
+  "proposer": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high"
+  },
+  "seed": 42,
+  "split_ratios": {
+    "search": 0.2,
+    "validation": 0.2,
+    "final_test": 0.6
+  },
+  "generation": {
+    "temperature": null,
+    "max_tokens": null
+  },
+  "search_protocol": {
+    "candidates_per_iteration": 2,
+    "min_iterations": 10,
+    "target_iterations": 10,
+    "max_iterations": 15,
+    "promotion_top_k": 3,
+    "search_examples": 80,
+    "smoke_examples": 10,
+    "guard_fraction": 0.25,
+    "early_stopping_patience": null,
+    "estimated_tokens_per_solver_call": 4096
+  }
+}
