@@ -254,7 +254,18 @@ class FullSearchV3Proposer:
         schema_bytes = _read_schema_bytes()
         input_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         timestamp = _timestamp(self._timestamp_factory)
-        for attempt in range(1, FULL_SEARCH_V3_MAX_PROPOSAL_ATTEMPTS + 1):
+        rejected_attempts = _resumable_rejected_attempt_count(
+            receipt_directory,
+            iteration=iteration,
+            input_sha256=input_sha256,
+        )
+        if rejected_attempts == FULL_SEARCH_V3_MAX_PROPOSAL_ATTEMPTS:
+            raise FullSearchV3ProposalExhausted(
+                "three invalid or duplicate V3 proposal attempts were rejected"
+            )
+        for attempt in range(
+            rejected_attempts + 1, FULL_SEARCH_V3_MAX_PROPOSAL_ATTEMPTS + 1
+        ):
             try:
                 output = self._invoke(prompt, schema_bytes)
                 candidate = _candidate_from_json(
@@ -398,6 +409,8 @@ def build_full_search_v3_proposer_input(
 
 def load_full_search_v3_accepted_proposal(
     receipt_path: str | Path,
+    *,
+    expected_iteration: int | None = None,
 ) -> FullSearchV3ProposalResult:
     """Rehydrate one accepted durable receipt without invoking the proposer.
 
@@ -414,12 +427,20 @@ def load_full_search_v3_accepted_proposal(
         raise FullSearchV3ProposerInfrastructureError(
             "accepted proposal receipt is unreadable or invalid"
         ) from exc
+    if expected_iteration is not None:
+        _validate_iteration(expected_iteration)
     if (
         not isinstance(record, Mapping)
         or record.get("protocol_id") != FULL_SEARCH_V3_PROTOCOL_ID
         or record.get("status") != "accepted"
         or not isinstance(record.get("attempt"), int)
         or record["attempt"] < 1
+        or not isinstance(record.get("iteration"), int)
+        or record["iteration"] < 0
+        or (
+            expected_iteration is not None
+            and record["iteration"] != expected_iteration
+        )
     ):
         raise FullSearchV3ProposerInfrastructureError(
             "proposal receipt is not an accepted V3 proposal"
@@ -739,6 +760,70 @@ def _write_receipt(directory: Path, record: Mapping[str, Any]) -> Path:
     finally:
         temporary.unlink(missing_ok=True)
     return destination
+
+
+def _resumable_rejected_attempt_count(
+    directory: Path,
+    *,
+    iteration: int,
+    input_sha256: str,
+) -> int:
+    """Return contiguous validated rejected attempts from an interrupted call.
+
+    A rejected receipt is durable progress.  On resume it consumes its original
+    attempt rather than being overwritten or causing a fourth invalid-output
+    attempt.  Any other receipt shape is unsafe to reinterpret here and is
+    left for the trusted orchestrator's accepted-receipt recovery path.
+    """
+
+    if not directory.exists():
+        return 0
+    if not directory.is_dir():
+        raise FullSearchV3ProposerInfrastructureError(
+            "proposal receipt directory is not a directory"
+        )
+    receipts = sorted(directory.glob("attempt_*.json"))
+    for expected_attempt, path in enumerate(receipts, start=1):
+        if path.name != f"attempt_{expected_attempt:05d}.json":
+            raise FullSearchV3ProposerInfrastructureError(
+                "proposal attempt receipts are not contiguous"
+            )
+        try:
+            record = json.loads(
+                path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
+            )
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            FullSearchV3CandidateValidationError,
+        ) as exc:
+            raise FullSearchV3ProposerInfrastructureError(
+                "proposal attempt receipt is unreadable or invalid"
+            ) from exc
+        if (
+            not isinstance(record, Mapping)
+            or record.get("schema_version") != FULL_SEARCH_V3_PROPOSER_SCHEMA_VERSION
+            or record.get("protocol_id") != FULL_SEARCH_V3_PROTOCOL_ID
+            or record.get("instruction_version")
+            != FULL_SEARCH_V3_PROPOSER_INSTRUCTION_VERSION
+            or record.get("status") != "rejected"
+            or record.get("iteration") != iteration
+            or record.get("attempt") != expected_attempt
+            or record.get("input_sha256") != input_sha256
+            or record.get("category") not in {"invalid_output", "duplicate"}
+            or record.get("candidate_id") is not None
+            or record.get("candidate_source_sha256") is not None
+            or record.get("candidate") is not None
+        ):
+            raise FullSearchV3ProposerInfrastructureError(
+                "proposal attempt receipts are incompatible with this proposal"
+            )
+    if len(receipts) > FULL_SEARCH_V3_MAX_PROPOSAL_ATTEMPTS:
+        raise FullSearchV3ProposerInfrastructureError(
+            "proposal attempt receipts exceed the V3 limit"
+        )
+    return len(receipts)
 
 
 def _sanitized_environment() -> dict[str, str]:

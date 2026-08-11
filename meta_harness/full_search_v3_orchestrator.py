@@ -330,7 +330,9 @@ class FullSearchV3Orchestrator:
         accepted: list[FullSearchV3ProposalResult] = []
         for path in sorted(directory.glob("attempt_*.json")):
             try:
-                proposal = load_full_search_v3_accepted_proposal(path)
+                proposal = load_full_search_v3_accepted_proposal(
+                    path, expected_iteration=iteration
+                )
             except Exception as exc:
                 if _receipt_declares_accepted(path):
                     raise FullSearchV3OrchestrationError(
