@@ -31,6 +31,14 @@ _SENSITIVE_PATTERNS = (
 )
 
 
+def contains_sensitive_value(value: Any) -> bool:
+    """Return whether text matches the cache's artifact-redaction boundary."""
+
+    return isinstance(value, str) and any(
+        pattern.search(value) for pattern in _SENSITIVE_PATTERNS
+    )
+
+
 class SearchCacheError(ValueError):
     """Base class for safe SEARCH cache failures."""
 
@@ -264,7 +272,7 @@ def _ensure_safe(
         separators=(",", ":"),
     )
     for value in (serialized_identity, result.content):
-        if any(pattern.search(value) for pattern in _SENSITIVE_PATTERNS):
+        if contains_sensitive_value(value):
             raise SearchCacheSafetyError(
                 "SEARCH cache input contains sensitive material and was not written"
             )
@@ -336,4 +344,5 @@ __all__ = [
     "SearchCacheError",
     "SearchCacheIntegrityError",
     "SearchCacheSafetyError",
+    "contains_sensitive_value",
 ]
