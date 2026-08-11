@@ -469,7 +469,7 @@ passes the durable run identity to repository entry points for resume.
 - [x] M1: protocol/configuration and exact deterministic split implemented.
 - [x] M2: solver boundary, cache, retries, and concurrency implemented.
 - [x] M3: full-SEARCH evaluator implemented.
-- [ ] M4: one-candidate proposer and SEARCH orchestrator implemented.
-- [ ] M5: offline freeze and isolated paired FINAL implemented.
+- [x] M4: one-candidate proposer and SEARCH orchestrator implemented.
+- [x] M5: offline freeze and isolated paired FINAL implemented.
 - [ ] M6: thin server notebook and execution interface implemented.
 - [ ] M7: legacy removal and final offline verification completed.
