@@ -384,8 +384,8 @@ must not appear in diagnostics.
 
 - [x] M0: approved contract persisted in `AGENTS.md` and this plan.
 - [x] M1: protocol/configuration and exact deterministic split implemented.
-- [ ] M2: solver boundary, cache, retries, and concurrency implemented.
-- [ ] M3: full-SEARCH evaluator implemented.
+- [x] M2: solver boundary, cache, retries, and concurrency implemented.
+- [x] M3: full-SEARCH evaluator implemented.
 - [ ] M4: one-candidate proposer and SEARCH orchestrator implemented.
 - [ ] M5: offline freeze and isolated paired FINAL implemented.
 - [ ] M6: server workflow and operator interfaces implemented.
