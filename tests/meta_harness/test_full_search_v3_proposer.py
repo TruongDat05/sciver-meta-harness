@@ -170,6 +170,49 @@ def test_three_attempt_exhaustion_records_each_rejection(tmp_path):
     assert len(runner.calls) == 3
 
 
+def test_rejected_attempt_receipts_resume_without_repeating_an_attempt(tmp_path):
+    invalid = _payload()
+    invalid["candidate"]["templates"] = {"direct": "invalid"}
+
+    class InterruptingRunner:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, command, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated proposer interruption")
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps(invalid), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    interrupted = InterruptingRunner()
+    with pytest.raises(RuntimeError, match="simulated proposer interruption"):
+        _propose(tmp_path, interrupted)
+
+    resumed = FakeRunner([invalid, invalid])
+    with pytest.raises(FullSearchV3ProposalExhausted, match="three invalid"):
+        _propose(tmp_path, resumed)
+
+    receipts = sorted(
+        (
+            tmp_path
+            / "workspace"
+            / "meta_harness"
+            / "full_search_v3"
+            / "offline_v3"
+            / "proposals"
+            / "iteration_0001"
+        ).glob("attempt_*.json")
+    )
+    assert [path.name for path in receipts] == [
+        "attempt_00001.json",
+        "attempt_00002.json",
+        "attempt_00003.json",
+    ]
+    assert len(resumed.calls) == 2
+
+
 def test_proposer_input_is_sanitized_and_rejects_prohibited_failure_data(
     tmp_path, monkeypatch
 ):

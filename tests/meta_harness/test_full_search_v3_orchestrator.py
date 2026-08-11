@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import subprocess
 from types import MappingProxyType
 
 import pytest
@@ -21,6 +24,7 @@ from meta_harness.full_search_v3_proposer import (
     FullSearchV3Candidate,
     FullSearchV3ProposalExhausted,
     FullSearchV3ProposalResult,
+    FullSearchV3Proposer,
 )
 from meta_harness.schemas import template_source_sha256
 from meta_harness.schemas import canonical_json
@@ -304,12 +308,13 @@ def test_accepted_receipt_recovers_without_reproposing_after_interruption(tmp_pa
     receipt_path.parent.mkdir(parents=True)
     receipt_path.write_text(
         canonical_json(
-            {
-                "protocol_id": FULL_SEARCH_V3_PROTOCOL_ID,
-                "status": "accepted",
-                "attempt": 1,
-                "candidate": candidate,
-            }
+                {
+                    "protocol_id": FULL_SEARCH_V3_PROTOCOL_ID,
+                    "status": "accepted",
+                    "iteration": 1,
+                    "attempt": 1,
+                    "candidate": candidate,
+                }
         ),
         encoding="utf-8",
     )
@@ -357,7 +362,6 @@ def test_proposer_receives_only_sanitized_search_feedback_and_no_final_data(tmp_
     ).run()
 
     assert list(proposer.calls[0]["representative_search_failures"]) == failures
-
     with pytest.raises(ValueError, match="prohibited"):
         _orchestrator(
             tmp_path / "rejected",
@@ -372,3 +376,124 @@ def test_proposer_receives_only_sanitized_search_feedback_and_no_final_data(tmp_
                 }
             ],
         )
+
+
+def test_mocked_complete_search_flow_resumes_from_atomic_checkpoint(tmp_path):
+    ordered_ids = tuple(f"search-{index:04d}" for index in range(1000))
+    search_input = FullSearchV3SearchInput(
+        _manifest=MappingProxyType(
+            {
+                "split_sha256": "a" * 64,
+                "search_membership_sha256": "b" * 64,
+            }
+        ),
+        _records=tuple(
+            MappingProxyType({"sample_id": sample_id}) for sample_id in ordered_ids
+        ),
+    )
+
+    class ScriptedCodexRunner:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, command, **kwargs):
+            serialized = kwargs["input"].decode("utf-8")
+            envelope = json.loads(serialized.rsplit("SANITIZED_INPUT_JSON\n", 1)[1])
+            assert set(envelope) == {
+                "protocol_id",
+                "iteration",
+                "parent",
+                "aggregate_search_metrics",
+                "lineage",
+                "representative_search_failures",
+            }
+            assert set(envelope["aggregate_search_metrics"]) <= {
+                "macro_f1",
+                "accuracy",
+                "parse_coverage",
+                "total_records",
+                "parsed_predictions",
+                "abstentions_or_parse_failures",
+                "infrastructure_failures",
+            }
+            assert "FINAL" not in repr(envelope)
+            assert "sample_id" not in repr(envelope)
+            iteration = envelope["iteration"]
+            templates = {
+                method: source + f"\nMocked integration check {iteration}."
+                for method, source in envelope["parent"]["templates"].items()
+            }
+            payload = {
+                "iteration": iteration,
+                "candidate": {
+                    "candidate_id": f"candidate_{iteration:03d}",
+                    "parent_id": envelope["parent"]["candidate_id"],
+                    "hypothesis": "Independent checks may reduce ambiguous decisions.",
+                    "expected_tradeoff": "The added check may make responses longer.",
+                    "templates": templates,
+                },
+            }
+            self.calls.append((iteration, envelope))
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    class MembershipCheckingEvaluator(FakeEvaluator):
+        def p0(self, **kwargs):
+            assert tuple(kwargs["search_input"].sample_ids) == ordered_ids
+            return super().p0(**kwargs)
+
+        def candidate(self, **kwargs):
+            assert tuple(kwargs["search_input"].sample_ids) == ordered_ids
+            return super().candidate(**kwargs)
+
+    runner = ScriptedCodexRunner()
+    proposer = FullSearchV3Proposer(runner=runner)
+    evaluator = MembershipCheckingEvaluator()
+    interrupted = {"value": False}
+
+    def interrupt_once(transition, _state):
+        if transition == "candidate_complete" and not interrupted["value"]:
+            interrupted["value"] = True
+            raise RuntimeError("simulated checkpoint interruption")
+
+    first = FullSearchV3Orchestrator(
+        repository_root=tmp_path,
+        run_id="mocked_integration",
+        search_input=search_input,
+        solver_identity_sha256="c" * 64,
+        cache=object(),
+        executor=object(),
+        proposer=proposer,
+        proposer_identity={"kind": "offline_fake", "version": 1},
+        p0_evaluator=evaluator.p0,
+        candidate_evaluator=evaluator.candidate,
+        transition_hook=interrupt_once,
+    )
+    with pytest.raises(RuntimeError, match="simulated checkpoint interruption"):
+        first.run()
+
+    resumed = FullSearchV3Orchestrator(
+        repository_root=tmp_path,
+        run_id="mocked_integration",
+        search_input=search_input,
+        solver_identity_sha256="c" * 64,
+        cache=object(),
+        executor=object(),
+        proposer=proposer,
+        proposer_identity={"kind": "offline_fake", "version": 1},
+        p0_evaluator=evaluator.p0,
+        candidate_evaluator=evaluator.candidate,
+    )
+    state = resumed.run()
+
+    assert state["status"] == "patience_stopped"
+    assert len(state["iterations"]) == 15
+    assert len(runner.calls) == len(evaluator.candidate_calls) == 15
+    assert len(evaluator.p0_calls) == 1
+    assert [iteration for iteration, _envelope in runner.calls] == list(range(1, 16))
+    assert sum(
+        call["candidate_id"] == "candidate_001"
+        for call in evaluator.candidate_calls
+    ) == 1
+    assert json.loads(resumed.state_path.read_text(encoding="utf-8")) == state
