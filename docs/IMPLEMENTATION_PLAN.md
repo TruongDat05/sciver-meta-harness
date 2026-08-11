@@ -17,6 +17,15 @@ Milestone 0 is complete when this document and `AGENTS.md` persist the design.
 It changes no runtime behavior. Subsequent work must follow the numbered
 milestones below; no live experiment is authorized merely by this plan.
 
+The repository is the complete reusable experiment engine. It owns the split,
+solver/API boundary, cache/retry/concurrency, SEARCH loop, proposer boundary,
+ranking, patience, checkpoints, freeze, paired FINAL, persistence, and
+summaries. The final server Jupyter Notebook is a thin launcher and operator
+layer only: it configures runtime paths and environment, calls supported
+repository entry points, and inspects their artifacts. It must not contain its
+own implementation of splitting, evaluation loops, candidate search, ranking,
+patience, retry/cache behavior, freeze logic, or FINAL scoring.
+
 ## 2. Experiment objective
 
 Optimize only the text of the four existing SciVer prompt templates while
@@ -176,6 +185,10 @@ The following map is for planning only; no Milestone 0 code change is implied.
 8. **Freeze/FINAL service** writes an immutable P* artifact from SEARCH only,
    then separately executes the paired P0/P* FINAL evaluation under a one-time
    completion receipt.
+9. **Thin notebook interface** calls the preparation, preflight, SEARCH,
+   freeze, and FINAL repository entry points. It may clone/pull and install the
+   repository and set runtime paths, but it contains no experiment or business
+   logic of its own.
 
 ## 7. Artifact layout
 
@@ -197,6 +210,12 @@ cache, checkpoint, and finalization layouts, but no private path may be mounted
 or supplied to SEARCH/proposer processes. SEARCH-facing artifacts must omit
 FINAL identities and records, credentials, Authorization headers, endpoint
 values, proposer-visible gold labels, and image base64 data.
+
+The completed engine must keep run-local SEARCH, freeze, and FINAL artifacts
+under an explicit resumable run identity. The server notebook consumes those
+artifact paths and summaries; it does not invent a parallel layout or manage
+state itself. FINAL artifacts remain unavailable to the SEARCH and proposer
+entry points.
 
 ## 8. KEEP/MODIFY/REMOVE/ADD decisions
 
@@ -228,8 +247,8 @@ values, proposer-visible gold labels, and image base64 data.
 
 - A protocol-specific exact-count splitter, full-SEARCH evaluator/orchestrator,
   one-candidate proposer contract, safe SEARCH cache, paired-FINAL execution
-  receipt, dry-run preflight, operator documentation, and focused offline
-  tests.
+  receipt, callable repository entry points, dry-run preflight, a thin server
+  notebook, operator documentation, and focused offline tests.
 
 ## 9. Milestones
 
@@ -264,32 +283,60 @@ using frozen prompt/request/parser behavior. Compute Macro-F1 and Accuracy,
 write sanitized durable results, and enforce full coverage/eligibility. Add
 P0-equivalence and image-order regression tests.
 
-### Milestone 4 — Codex proposer and search orchestration
+### Milestone 4 — complete callable SEARCH engine
 
-Implement one-candidate iterations, up to three proposal attempts, full
-SEARCH scoring, the exact ranking key, patience 8, minimum 15, maximum 40,
-checkpoint/resume, and P0 eligibility. Restrict proposer input to prompt text
-and permitted sanitized SEARCH feedback.
+Implement the one-candidate proposer and deterministic candidate validation;
+the complete full-SEARCH orchestrator; P0 evaluation before candidates; the
+exact ranking and patience rules; the 15--40 iteration schedule; durable
+checkpoint/resume; and sanitized SEARCH-only feedback. Provide one clear,
+high-level Python entry point that a future notebook can call. The repository,
+not the notebook, owns the complete SEARCH loop. No real experiment is
+required during implementation.
 
-### Milestone 5 — freeze and isolated FINAL
+### Milestone 5 — complete experiment engine: freeze + FINAL
 
-Freeze the SEARCH winner offline and implement a separate explicit paired FINAL
-run. Require exactly one P0 and one P* evaluation over the same 1,000 FINAL
-IDs, enforce completion receipts/resume semantics, and prove FINAL cannot
-change SEARCH state or winner.
+Freeze the offline SEARCH winner into an immutable P* artifact, then implement
+an explicit isolated paired FINAL P0/P* execution over the same 1,000 FINAL
+IDs. Support resume without redispatching completed FINAL work and provide
+clear Python entry points for freeze and FINAL. After M5, the repository
+contains all scientific experiment logic needed for a real end-to-end run; a
+full live experiment is still not required during implementation.
 
-### Milestone 6 — server workflow and operator interfaces
+### Milestone 6 — server Jupyter Notebook and thin execution interface
 
-Add dry-run preflight, operator-facing configuration diagnostics, explicit live
-smoke workflow, workload/budget estimates, safe resume commands, and final
-artifact inspection. All commands remain provider-neutral and default offline.
+Create one simple, readable server-oriented notebook, for example
+`notebooks/sciver_full_search_v3_server.ipynb`. It may clone/pull the
+repository, install the repository/environment, define `DATA_ROOT` and a
+workspace/run path, and call the deterministic preparation code from M1. It
+configures `API_URL` and `API_KEY` only at runtime (from the server environment
+or hidden input such as `getpass` for the key), performs local/preflight
+validation, and may make one minimal explicitly authorized live smoke request.
 
-### Milestone 7 — legacy removal and final verification
+The notebook then calls the repository SEARCH entry point, displays the SEARCH
+summary and winner, calls repository freeze, calls the paired FINAL entry point,
+and displays or exports final metrics and artifact paths. It supports resume by
+passing the same run identity/path. It must not duplicate split preparation,
+evaluation, candidate search, ranking, patience, retry/cache, freeze, or FINAL
+logic inside notebook cells. Do not expand M6 into a deployment framework,
+distributed scheduler, service layer, or remote-provider-specific server
+abstraction unless the notebook workflow strictly requires it. Brief guidance
+for tmux, nohup, or Jupyter use is secondary to the runnable thin notebook.
 
-After migration coverage is complete, remove or archive obsolete staged,
+### Milestone 7 — cleanup and final verification
+
+Only after replacement coverage, remove or archive obsolete staged,
 hard-search, protected-validation, retry/reparse, and transfer-only paths.
-Run the full offline suite and perform compatibility, privacy, prompt, image,
-and final-isolation audits.
+Confirm that the notebook uses only supported full-search v3 entry points; run
+the full offline suite, `python -m compileall -q .`, and `git diff --check`;
+then audit privacy/security, frozen prompts/images/parser behavior,
+SEARCH/FINAL isolation, and server-clone readiness. The repository must be
+ready to clone on the server.
+
+The real full SEARCH/FINAL experiment is deliberately deferred until the
+codebase and notebook are complete. It is performed by the operator only after
+they clone/pull the finalized Git commit, configure dataset/workspace and
+runtime credentials, run preflight, explicitly authorize a minimal live smoke
+request, run SEARCH, freeze P*, run paired FINAL, and inspect/export results.
 
 ## 10. Unit test plan
 
@@ -312,6 +359,8 @@ and final-isolation audits.
   before access, and no backflow into SEARCH.
 - Security tests verify credential/header/base64 redaction and default offline
   behavior at every boundary.
+- Entry-point and notebook tests prove that a thin launcher delegates to the
+  repository engine rather than reimplementing experiment behavior.
 
 ## 11. Offline integration test plan
 
@@ -321,7 +370,8 @@ the minimum 15 candidate iterations, interrupt at proposal/evaluation/cache/
 freeze/final checkpoints, and resume. Assert identical state, rank, prompt
 hashes, cache use, 1000 SEARCH coverage per valid prompt, and no FINAL access
 before paired finalization. Mock every HTTP request and subprocess call; tests
-must not invoke Codex recursively.
+must not invoke Codex recursively or call the real model. Mocked tests may
+simulate all 1000 logical SEARCH records per prompt without a live request.
 
 ## 12. Dry-run test plan
 
@@ -335,11 +385,13 @@ zero calls.
 ## 13. Opt-in live smoke plan
 
 This is not a test and requires explicit operator authorization after all
-offline checks pass. Preflight a new immutable run, validate `API_URL` and
-`API_KEY` without printing values, and issue a minimal explicitly gated request
-against a non-FINAL local record using frozen P0. Do not propose a candidate,
-run a benchmark, create a hard subset, or open FINAL. Inspect sanitized output
-and only then separately authorize a full SEARCH run.
+offline checks pass. From the thin server notebook or an equivalent repository
+entry point, preflight a new immutable run, validate `API_URL` and `API_KEY`
+without printing values, and issue a minimal explicitly gated request against a
+non-FINAL local record using frozen P0. Do not propose a candidate, run a
+benchmark, create a hard subset, or open FINAL. Inspect sanitized output and
+only then separately authorize a full SEARCH run. Full live SEARCH and FINAL
+are deferred until the repository and notebook are finalized.
 
 ## 14. Acceptance criteria
 
@@ -356,6 +408,9 @@ and only then separately authorize a full SEARCH run.
   over identical 1,000 IDs, with no influence on SEARCH or P*.
 - Resume, retry, concurrency, cache, redaction, live gating, and no-network
   test requirements are verified offline.
+- The repository exposes callable preparation, preflight, SEARCH, freeze, and
+  FINAL entry points, and the server notebook is a thin launcher that reuses
+  them without duplicating experiment logic.
 - Legacy staged behavior is either kept clearly separate during migration or
   removed only in Milestone 7 with replacement coverage.
 
@@ -363,7 +418,8 @@ and only then separately authorize a full SEARCH run.
 
 Before any opt-in live run, verify locally and without exposing secrets:
 
-- `API_URL` and `API_KEY` are present only in the process environment.
+- `API_URL` and `API_KEY` are supplied only at notebook/process runtime and
+  are not committed or persisted; interactive key entry is hidden.
 - The selected model is exactly Qwen/Qwen3.5-35B-A3B and the server presents
   the required compatible chat-completions interface.
 - Generation semantics, timeout, retry policy, concurrency limit, request
@@ -380,7 +436,34 @@ Failure of any preflight condition aborts before inference. Endpoint values,
 credentials, authorization material, raw request payloads, and image base64
 must not appear in diagnostics.
 
-## 16. Implementation status checklist
+## 16. Server notebook workflow
+
+The final notebook is an operator convenience layer around repository APIs. Its
+conceptual workflow is:
+
+```text
+Git repository
+  -> clone/pull on server
+  -> install repository/environment
+  -> provide SciVer dataset path and workspace/run path
+  -> call repository deterministic preparation
+  -> configure runtime API_URL/API_KEY
+  -> repository preflight
+  -> optional minimal explicitly authorized live smoke request
+  -> repository SEARCH engine
+  -> inspect SEARCH winner
+  -> repository freeze
+  -> repository paired FINAL engine
+  -> inspect/export results
+```
+
+Credentials may be set in a notebook process with environment variables such
+as `os.environ["API_URL"] = ...` and hidden input for `API_KEY`, or inherited
+from the server environment. They must never be stored in the committed
+notebook, repository, or result artifacts. Reusing the same workspace/run path
+passes the durable run identity to repository entry points for resume.
+
+## 17. Implementation status checklist
 
 - [x] M0: approved contract persisted in `AGENTS.md` and this plan.
 - [x] M1: protocol/configuration and exact deterministic split implemented.
@@ -388,5 +471,5 @@ must not appear in diagnostics.
 - [x] M3: full-SEARCH evaluator implemented.
 - [ ] M4: one-candidate proposer and SEARCH orchestrator implemented.
 - [ ] M5: offline freeze and isolated paired FINAL implemented.
-- [ ] M6: server workflow and operator interfaces implemented.
+- [ ] M6: thin server notebook and execution interface implemented.
 - [ ] M7: legacy removal and final offline verification completed.

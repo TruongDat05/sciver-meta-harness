@@ -84,6 +84,20 @@ The canonical detailed plan is `docs/IMPLEMENTATION_PLAN.md`. For the
 The earlier `sciver_full_search_v2` 750/1250 design was abandoned before any
 official live experiment and is not an active or compatible protocol.
 
+- The repository is the complete reusable experiment engine. It owns
+  deterministic preparation, solver/API calls, caching, retries, concurrency,
+  SEARCH evaluation and orchestration, proposing, ranking, patience,
+  checkpoint/resume, winner freezing, paired FINAL execution, persistence,
+  and summaries. A final server Jupyter Notebook is only a thin launcher and
+  operator layer; it must call supported repository entry points and must not
+  reimplement any experiment logic.
+- A notebook may supply `API_URL` and `API_KEY` only at runtime, including from
+  the server environment or hidden interactive input for the key. Never commit
+  or persist those values in a notebook, repository artifact, or result.
+- Implementation milestones, tests, dry runs, and notebook development do not
+  authorize a real experiment. Full live SEARCH and paired FINAL execution may
+  occur only after the repository and notebook are finalized and the user has
+  explicitly authorized that live scope.
 - Meta-Harness is prompt-only optimization. A candidate has exactly the
   `direct`, `analytical`, `parallel`, and `sequential` templates; only their
   text may change. Codex proposes prompt text only; trusted Python validates,
