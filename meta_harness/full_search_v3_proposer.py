@@ -396,6 +396,75 @@ def build_full_search_v3_proposer_input(
     }
 
 
+def load_full_search_v3_accepted_proposal(
+    receipt_path: str | Path,
+) -> FullSearchV3ProposalResult:
+    """Rehydrate one accepted durable receipt without invoking the proposer.
+
+    The trusted orchestrator uses this only to recover an accepted proposal if
+    an interruption occurred before its own state checkpoint was committed.
+    """
+
+    path = Path(receipt_path)
+    try:
+        record = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, FullSearchV3CandidateValidationError) as exc:
+        raise FullSearchV3ProposerInfrastructureError(
+            "accepted proposal receipt is unreadable or invalid"
+        ) from exc
+    if (
+        not isinstance(record, Mapping)
+        or record.get("protocol_id") != FULL_SEARCH_V3_PROTOCOL_ID
+        or record.get("status") != "accepted"
+        or not isinstance(record.get("attempt"), int)
+        or record["attempt"] < 1
+    ):
+        raise FullSearchV3ProposerInfrastructureError(
+            "proposal receipt is not an accepted V3 proposal"
+        )
+    raw_candidate = record.get("candidate")
+    _exact_fields(
+        raw_candidate,
+        {
+            "candidate_id",
+            "parent_id",
+            "hypothesis",
+            "expected_tradeoff",
+            "templates",
+            "source_sha256",
+        },
+        "accepted receipt candidate",
+    )
+    try:
+        family = PromptFamily(raw_candidate["templates"])
+        templates = {method: family[method].template for method in TEMPLATE_KEYS}
+        candidate = FullSearchV3Candidate(
+            candidate_id=_identifier(raw_candidate["candidate_id"], "candidate_id"),
+            parent_id=_identifier(raw_candidate["parent_id"], "parent_id"),
+            hypothesis=_safe_candidate_text(raw_candidate["hypothesis"], "hypothesis"),
+            expected_tradeoff=_safe_candidate_text(
+                raw_candidate["expected_tradeoff"], "expected_tradeoff"
+            ),
+            templates=MappingProxyType(templates),
+            source_sha256=_sha256(raw_candidate["source_sha256"], "source_sha256"),
+        )
+    except (InvalidPromptFamilyError, FullSearchV3CandidateValidationError) as exc:
+        raise FullSearchV3ProposerInfrastructureError(
+            "accepted proposal receipt candidate is invalid"
+        ) from exc
+    if template_source_sha256(candidate.templates) != candidate.source_sha256:
+        raise FullSearchV3ProposerInfrastructureError(
+            "accepted proposal receipt hash is inconsistent"
+        )
+    return FullSearchV3ProposalResult(
+        candidate=candidate,
+        receipt_path=path,
+        attempt=record["attempt"],
+    )
+
+
 def _candidate_from_json(
     serialized: str,
     *,
@@ -644,6 +713,7 @@ def _receipt(
         "candidate_source_sha256": (
             None if candidate is None else candidate.source_sha256
         ),
+        "candidate": None if candidate is None else candidate.as_dict(),
     }
 
 
@@ -773,4 +843,5 @@ __all__ = [
     "FullSearchV3ProposerError",
     "FullSearchV3ProposerInfrastructureError",
     "build_full_search_v3_proposer_input",
+    "load_full_search_v3_accepted_proposal",
 ]
