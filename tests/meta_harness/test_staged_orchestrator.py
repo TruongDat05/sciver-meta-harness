@@ -349,7 +349,12 @@ def test_model_change_requires_new_run_and_finalized_run_is_immutable(tmp_path):
 
 
 def test_archived_main_v1_v2_artifacts_remain_readable():
-    root = Path(__file__).resolve().parents[2]
+    root = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "meta_harness"
+        / "legacy_runs"
+    )
 
     v1 = load_run_state(root, "sciver-meta-gemma-main-v1")
     v2 = load_run_state(root, "sciver-meta-gemma-main-v2")

@@ -87,6 +87,55 @@ def test_successful_request_extracts_content_and_uses_expected_request():
     response.iter_lines.assert_not_called()
 
 
+def test_generation_options_are_propagated_without_changing_legacy_defaults():
+    session = Mock()
+    session.post.return_value = _response()
+    generation = {
+        "temperature": 0,
+        "top_p": 1,
+        "seed": 42,
+        "n": 1,
+        "stream": False,
+        "max_tokens": 8192,
+    }
+
+    _client(session).create_chat_completion(
+        MODEL,
+        MESSAGES,
+        generation_options=generation,
+    )
+
+    assert session.post.call_args.kwargs["json"] == {
+        "model": MODEL,
+        "messages": MESSAGES,
+        **generation,
+    }
+
+
+@pytest.mark.parametrize(
+    "generation_options",
+    [
+        {"unknown": 1},
+        {"stream": True},
+        {"n": 2},
+        {"max_tokens": 0},
+    ],
+)
+def test_invalid_generation_options_fail_before_http(
+    generation_options,
+):
+    session = Mock()
+
+    with pytest.raises(InvalidConfigurationError):
+        _client(session).create_chat_completion(
+            MODEL,
+            MESSAGES,
+            generation_options=generation_options,
+        )
+
+    session.post.assert_not_called()
+
+
 def test_missing_or_invalid_usage_is_ignored_without_stale_accounting():
     session = Mock()
     session.post.side_effect = [
@@ -207,6 +256,20 @@ def test_rate_limit_is_retried_and_respects_retry_after():
     assert content == "Test response"
     assert session.post.call_count == 2
     sleep.assert_called_once_with(3.0)
+
+
+def test_terminal_http_error_exposes_numeric_retry_after_for_outer_boundary():
+    session = Mock()
+    session.post.return_value = _response(
+        429,
+        headers={"Retry-After": "90"},
+    )
+
+    with pytest.raises(RateLimitError) as raised:
+        _client(session, max_retries=0).create_chat_completion(MODEL, MESSAGES)
+
+    assert raised.value.retry_after_seconds == 90.0
+    assert "90" not in str(raised.value)
 
 
 @pytest.mark.parametrize("status_code", [500, 502, 503, 504])

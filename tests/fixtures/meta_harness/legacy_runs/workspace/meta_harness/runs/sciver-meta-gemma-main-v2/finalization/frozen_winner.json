@@ -1,0 +1,44 @@
+{
+  "artifact_sha256": "58d5f87dc86ffd6eac6a1484a231abed76fe12e0c9a4e6860200af1dd8cd11ef",
+  "candidate": {
+    "candidate_id": "legacy_fixture_winner",
+    "source_sha256": "f3de474b828db955055305ecde4799ae309038e24a103e833dfa555f9c61bcae",
+    "templates": {
+      "analytical": "Claim: $claim\\nContext: $context\\nCaption: $caption\\nAnswer: yes or Answer: no.",
+      "direct": "Claim: $claim\\nContext: $context\\nCaption: $caption\\nAnswer: yes or Answer: no.",
+      "parallel": "Claim: $claim\\nContext: $context\\nCaption 1: $caption1\\nCaption 2: $caption2\\nAnswer: yes or Answer: no.",
+      "sequential": "Claim: $claim\\nContext: $context\\nCaption 1: $caption1\\nCaption 2: $caption2\\nAnswer: yes or Answer: no."
+    }
+  },
+  "candidate_id": "legacy_fixture_winner",
+  "candidate_sha256": "de03b3677e92fac7ca12facf5d6f45f539212d1611531eb5ee50da2d6ce478a6",
+  "code_revision": "0000000000000000000000000000000000000000",
+  "evaluator_version": "meta_harness_evaluator_v1",
+  "finalization_version": "meta_harness_finalization_v1",
+  "metrics_version": "binary_macro_f1_v1",
+  "parser_version": "answer_parser_v2",
+  "prompt_sha256": "f3de474b828db955055305ecde4799ae309038e24a103e833dfa555f9c61bcae",
+  "prompt_variant": "meta_cot",
+  "run_id": "sciver-meta-gemma-main-v2",
+  "schema_version": 1,
+  "search_solver_configuration": {},
+  "search_solver_configuration_sha256": "7d2233541696dedb4b43b9e7934ec19251bcb03367366503262131b2ed0bfdc6",
+  "split_hashes": {
+    "dataset_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "final_test_sample_ids_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "search_sample_ids_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "split_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "validation_sample_ids_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "templates": {
+    "analytical": "Claim: $claim\\nContext: $context\\nCaption: $caption\\nAnswer: yes or Answer: no.",
+    "direct": "Claim: $claim\\nContext: $context\\nCaption: $caption\\nAnswer: yes or Answer: no.",
+    "parallel": "Claim: $claim\\nContext: $context\\nCaption 1: $caption1\\nCaption 2: $caption2\\nAnswer: yes or Answer: no.",
+    "sequential": "Claim: $claim\\nContext: $context\\nCaption 1: $caption1\\nCaption 2: $caption2\\nAnswer: yes or Answer: no."
+  },
+  "validation": {
+    "macro_f1": 0.0,
+    "rankable": true,
+    "split": "validation"
+  }
+}

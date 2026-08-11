@@ -27,11 +27,13 @@ class RemoteClientError(Exception):
         http_status_code: int | None = None,
         response_error_code: str | None = None,
         response_error_message: str | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.http_status_code = http_status_code
         self.response_error_code = response_error_code
         self.response_error_message = response_error_message
+        self.retry_after_seconds = retry_after_seconds
 
 
 class InvalidConfigurationError(RemoteClientError, ValueError):
@@ -145,7 +147,11 @@ class RemoteChatCompletionsClient:
         self.last_usage: dict[str, int] | None = None
 
     def create_chat_completion(
-        self, model: str, messages: Sequence[Mapping[str, Any]]
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        generation_options: Mapping[str, Any] | None = None,
     ) -> str:
         """Return ``choices[0].message.content`` from a remote response."""
 
@@ -159,6 +165,7 @@ class RemoteChatCompletionsClient:
             "messages": list(messages),
             "stream": False,
         }
+        payload.update(_validate_generation_options(generation_options))
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._api_key}",
@@ -248,6 +255,9 @@ class RemoteChatCompletionsClient:
             "http_status_code": status_code,
             "response_error_code": error_code,
             "response_error_message": error_message,
+            "retry_after_seconds": _parse_retry_after(
+                getattr(response, "headers", None)
+            ),
         }
         if status_code == 400:
             raise InvalidRequestError(
@@ -293,6 +303,65 @@ def _validate_api_key(value: str | None) -> str:
     if "\r" in value or "\n" in value:
         raise InvalidConfigurationError("API_KEY contains invalid characters.")
     return value
+
+
+def _validate_generation_options(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate the additive non-streaming generation request surface."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise InvalidConfigurationError(
+            "generation_options must be a mapping when provided."
+        )
+    allowed = {"temperature", "top_p", "seed", "n", "stream", "max_tokens"}
+    if any(not isinstance(key, str) for key in value):
+        raise InvalidConfigurationError(
+            "generation_options field names must be strings."
+        )
+    unexpected = sorted(set(value) - allowed)
+    if unexpected:
+        raise InvalidConfigurationError(
+            "generation_options contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+
+    result = dict(value)
+    if "temperature" in result:
+        _validate_non_negative_number(result["temperature"], "temperature")
+    if "top_p" in result:
+        top_p = result["top_p"]
+        if (
+            isinstance(top_p, bool)
+            or not isinstance(top_p, (int, float))
+            or not math.isfinite(top_p)
+            or top_p <= 0
+            or top_p > 1
+        ):
+            raise InvalidConfigurationError(
+                "top_p must be a finite number greater than zero and at most one."
+            )
+    if "seed" in result and (
+        isinstance(result["seed"], bool) or not isinstance(result["seed"], int)
+    ):
+        raise InvalidConfigurationError("seed must be an integer.")
+    if "n" in result and (
+        isinstance(result["n"], bool)
+        or not isinstance(result["n"], int)
+        or result["n"] != 1
+    ):
+        raise InvalidConfigurationError("n must equal one.")
+    if "stream" in result and result["stream"] is not False:
+        raise InvalidConfigurationError("stream must be false.")
+    if "max_tokens" in result and (
+        isinstance(result["max_tokens"], bool)
+        or not isinstance(result["max_tokens"], int)
+        or result["max_tokens"] <= 0
+    ):
+        raise InvalidConfigurationError("max_tokens must be a positive integer.")
+    return result
 
 
 def _validate_api_url(value: str | None) -> str:
