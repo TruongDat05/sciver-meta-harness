@@ -84,6 +84,12 @@ class FullSearchV3RequestExecutor:
     def maximum_in_flight_requests(self) -> int:
         return self._maximum_in_flight_requests
 
+    @property
+    def cache(self) -> FullSearchV3SearchCache:
+        """Return the immutable completion cache used for request execution."""
+
+        return self._cache
+
     def complete(
         self,
         identity: SolverRequestIdentity,

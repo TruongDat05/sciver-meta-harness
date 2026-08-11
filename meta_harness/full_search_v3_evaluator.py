@@ -414,6 +414,10 @@ def evaluate_full_search_v3_candidate(
         raise FullSearchV3EvaluatorInputError(
             "executor must be FullSearchV3RequestExecutor"
         )
+    if executor.cache is not cache:
+        raise FullSearchV3EvaluatorInputError(
+            "executor and evaluator must use the same SEARCH cache"
+        )
     candidate_id = _validate_candidate_id(candidate_id)
     _require_sha256(solver_identity_sha256, "solver_identity_sha256")
     prompt_family = PromptFamily(prompt)
