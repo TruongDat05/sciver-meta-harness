@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+import hashlib
 import json
 from pathlib import Path
 from string import Template
 from types import MappingProxyType
 from typing import Any
+
+from utils.constant import COT_PROMPT
 
 
 TEMPLATE_KEYS = ("direct", "analytical", "parallel", "sequential")
@@ -134,6 +137,39 @@ def load_prompt_family(path: str | Path) -> PromptFamily:
     return PromptFamily.load(path)
 
 
+def canonical_baseline_sources() -> Mapping[str, str]:
+    """Return immutable source text for the canonical ``cot`` prompt family."""
+
+    return MappingProxyType(
+        {method: COT_PROMPT[method].template for method in TEMPLATE_KEYS}
+    )
+
+
+def canonical_json(value: Any) -> str:
+    """Return deterministic UTF-8-safe JSON with no insignificant whitespace."""
+
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise InvalidPromptFamilyError(
+            "prompt-family data must be canonically JSON serializable"
+        ) from exc
+
+
+def template_source_sha256(templates: Mapping[str, Any]) -> str:
+    """Hash exactly the four validated template source strings."""
+
+    family = PromptFamily(templates)
+    payload = {method: family[method].template for method in TEMPLATE_KEYS}
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
 def _validate_template(method: str, template: Template) -> None:
     source = template.template
     if not isinstance(source, str) or not source.strip():
@@ -186,8 +222,11 @@ __all__ = [
     "PromptFamily",
     "REQUIRED_PLACEHOLDERS",
     "TEMPLATE_KEYS",
+    "canonical_baseline_sources",
+    "canonical_json",
     "deserialize_prompt_family",
     "load_prompt_family",
     "serialize_prompt_family",
+    "template_source_sha256",
     "validate_prompt_family",
 ]

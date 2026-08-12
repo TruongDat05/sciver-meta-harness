@@ -6,11 +6,13 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+from PIL import Image
 
 import meta_harness.full_search_v3_server as server
 from meta_harness.full_search_v3_evaluator import FullSearchV3SearchInput
 from meta_harness.full_search_v3_orchestrator import FullSearchV3ResumeError
 from meta_harness.full_search_v3_preparation import FullSearchV3PreparationArtifacts
+from meta_harness.full_search_v3_solver import SolverResult
 
 
 RUN_ID = "server_offline"
@@ -27,6 +29,32 @@ def _search_input() -> FullSearchV3SearchInput:
             }
         ),
         _records=(),
+    )
+
+
+def _smoke_search_input(directory: Path) -> FullSearchV3SearchInput:
+    image_path = directory / "smoke.png"
+    Image.new("RGB", (2, 2), color="blue").save(image_path, format="PNG")
+    return FullSearchV3SearchInput(
+        _manifest=MappingProxyType(
+            {
+                "split_sha256": "c" * 64,
+                "search_membership_sha256": "d" * 64,
+            }
+        ),
+        _records=(
+            MappingProxyType(
+                {
+                    "sample_id": "search-only-smoke-sample",
+                    "claim_type": "direct",
+                    "claim": "A scientific claim.",
+                    "context": "SEARCH-only evidence.",
+                    "caption": "A SEARCH-only figure caption.",
+                    "image_path": str(image_path),
+                    "gold_label": "GROUND_TRUTH_MUST_NOT_LEAK",
+                }
+            ),
+        ),
     )
 
 
@@ -107,6 +135,7 @@ def test_search_preflight_is_dry_run_and_never_constructs_clients(
     assert status["workload"]["maximum_search_logical_calls"] == 41000
     assert status["solver"]["identity_sha256"] == SOLVER_IDENTITY
     assert set(status["checkpoints"]) == {
+        "smoke_receipt_path",
         "search_state_path",
         "search_cache_directory",
         "frozen_winner_path",
@@ -184,6 +213,7 @@ def test_search_start_delegates_without_leaking_runtime_values(monkeypatch, offl
         "preflight_full_search_v3_server_run",
         lambda **_kwargs: {"operation": "search_preflight"},
     )
+    monkeypatch.setattr(server, "_require_compatible_smoke_receipt", lambda **_kwargs: None)
 
     class FakeOrchestrator:
         def __init__(self, **kwargs):
@@ -207,6 +237,96 @@ def test_search_start_delegates_without_leaking_runtime_values(monkeypatch, offl
     serialized = str(result)
     assert "runtime.invalid" not in serialized
     assert "not-a-real-key" not in serialized
+
+
+def test_smoke_requires_separate_authorization_before_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server, "_runtime_credentials", lambda **_kwargs: pytest.fail("gate read credentials")
+    )
+
+    with pytest.raises(server.FullSearchV3ServerAuthorizationError, match="SMOKE"):
+        server.run_full_search_v3_server_smoke(
+            repository_root=tmp_path,
+            run_id=RUN_ID,
+            search_safe_manifest_path=tmp_path / "safe.json",
+            search_records_path=tmp_path / "records.json",
+            authorize_smoke_execution=False,
+        )
+
+
+def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
+    monkeypatch, tmp_path
+):
+    search_input = _smoke_search_input(tmp_path)
+    dispatched = []
+
+    class FakeSolver:
+        def complete(self, request):
+            dispatched.append(request)
+            return SolverResult(content="Therefore, the final answer is: Answer: yes")
+
+    monkeypatch.setattr(server, "load_full_search_v3_search_input", lambda **_kwargs: search_input)
+    monkeypatch.setattr(server.shutil, "which", lambda _command: "/fake/bin/proposer")
+    monkeypatch.setattr(server, "_source_commit", lambda _root, _supplied: COMMIT)
+    monkeypatch.setattr(server, "_runtime_credentials", lambda **_kwargs: ("https://runtime.invalid", "unmistakably-fake-key"))
+    monkeypatch.setattr(server, "solver_identity_from_api_url", lambda _value: SOLVER_IDENTITY)
+    monkeypatch.setattr(server, "_construct_live_solver", lambda *_args: FakeSolver())
+
+    arguments = {
+        "repository_root": tmp_path,
+        "run_id": RUN_ID,
+        "search_safe_manifest_path": tmp_path / "safe.json",
+        "search_records_path": tmp_path / "records.json",
+        "authorize_smoke_execution": True,
+        "source_commit": COMMIT,
+    }
+    first = server.run_full_search_v3_server_smoke(**arguments)
+    second = server.run_full_search_v3_server_smoke(**arguments)
+
+    assert len(dispatched) == 1
+    assert first["status"] == "complete" and first["logical_calls"] == 1
+    assert first["reused"] is False and second["reused"] is True
+    assert "GROUND_TRUTH_MUST_NOT_LEAK" not in str(dispatched[0].messages)
+    receipt_text = server.full_search_v3_server_smoke_receipt_path(
+        tmp_path, RUN_ID
+    ).read_text(encoding="utf-8")
+    for forbidden in (
+        "GROUND_TRUTH_MUST_NOT_LEAK",
+        "SEARCH-only evidence",
+        "runtime.invalid",
+        "unmistakably-fake-key",
+        "final answer",
+    ):
+        assert forbidden not in receipt_text
+
+    monkeypatch.setattr(server, "solver_identity_from_api_url", lambda _value: "e" * 64)
+    with pytest.raises(server.FullSearchV3ServerError, match="SMOKE receipt is incompatible"):
+        server.run_full_search_v3_server_smoke(**arguments)
+    assert len(dispatched) == 1
+
+
+def test_full_search_requires_compatible_smoke_receipt_before_client(
+    monkeypatch, tmp_path
+):
+    search_input = _smoke_search_input(tmp_path)
+    monkeypatch.setattr(server, "load_full_search_v3_search_input", lambda **_kwargs: search_input)
+    monkeypatch.setattr(server.shutil, "which", lambda _command: "/fake/bin/proposer")
+    monkeypatch.setattr(server, "_source_commit", lambda _root, _supplied: COMMIT)
+    monkeypatch.setattr(server, "_runtime_credentials", lambda **_kwargs: ("https://runtime.invalid", "unmistakably-fake-key"))
+    monkeypatch.setattr(server, "solver_identity_from_api_url", lambda _value: SOLVER_IDENTITY)
+    monkeypatch.setattr(
+        server, "_construct_live_solver", lambda *_args: pytest.fail("missing SMOKE dispatched")
+    )
+
+    with pytest.raises(server.FullSearchV3ServerError, match="compatible completed SMOKE"):
+        server.start_or_resume_full_search_v3_server_run(
+            repository_root=tmp_path,
+            run_id=RUN_ID,
+            search_safe_manifest_path=tmp_path / "safe.json",
+            search_records_path=tmp_path / "records.json",
+            authorize_search_execution=True,
+            source_commit=COMMIT,
+        )
 
 
 def test_search_status_delegates_to_nonmutating_m4_loader(monkeypatch, tmp_path):
@@ -240,6 +360,7 @@ def test_activity_inspection_is_read_only_and_reports_held_run_lock(tmp_path):
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
+    assert status["smoke_lock"] == "not_created"
     assert status["search_lock"] == "held"
     assert status["final_lock"] == "not_created"
 

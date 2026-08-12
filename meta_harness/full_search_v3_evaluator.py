@@ -46,8 +46,7 @@ from meta_harness.full_search_v3_solver import (
     build_solver_request,
     build_solver_request_identity,
 )
-from meta_harness.prompt_family import PromptFamily, TEMPLATE_KEYS
-from meta_harness.schemas import template_source_sha256
+from meta_harness.prompt_family import PromptFamily, TEMPLATE_KEYS, template_source_sha256
 from evaluation.metrics import EvaluationError, evaluate_dataset_records
 from utils.answer_parser import PARSER_VERSION, parse_answer
 from utils.constant import COT_PROMPT

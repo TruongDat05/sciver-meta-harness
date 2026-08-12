@@ -5,9 +5,9 @@
 This is the canonical implementation plan for the SciVer Meta-Harness redesign.
 Its locked experiment contract is `sciver_full_search_v3`. It supersedes the
 older staged, hard-search, promotion, protected-validation, and transfer
-descriptions for new SciVer prompt-search work. Historical documents and
-runtime modules remain available as legacy evidence until a later authorized
-milestone removes or archives them.
+descriptions for SciVer prompt-search work. Milestone 7 removed those obsolete
+runtime modules, entry points, fixtures, configurations, and historical design
+documents after replacement coverage passed.
 
 The earlier `sciver_full_search_v2` contract, with its 750/1250 split, was
 abandoned before any official live experiment. It is historical only and is
@@ -124,38 +124,26 @@ is 1,000 for frozen P0 plus 1,000 for frozen P*, for a FINAL total of 2,000.
 The maximum full 40-iteration run plus FINAL is therefore 43,000 logical
 solver evaluations. Transport retries are excluded from logical counts.
 
-## 4. Current-versus-target design
+## 4. Completed design
 
-The current implementation is a legacy staged design: it partitions
-search/validation/final roughly 20/20/60, builds a 50--100-item hard-search
-set from baseline errors and labels, applies a smoke gate, proposes two
-candidates per iteration, promotes top candidates to protected validation, and
-uses validation for selection. Its default schedule is 10--15 iterations and
-its ranking adds resource metrics. That behavior is incompatible with
-`sciver_full_search_v3`.
-
-The target has exactly two paper-disjoint splits with exact sample counts,
-full-SEARCH scoring for P0 and every candidate, one candidate per iteration,
-SEARCH-only selection, the 15--40/patience-8 schedule, and mandatory paired
-FINAL after offline freeze. Existing legacy modules must not be silently
-repurposed if their assumptions differ; replace their call paths deliberately
-and preserve compatibility until Milestone 7.
+The implementation has exactly two paper-disjoint splits with exact sample
+counts, full-SEARCH scoring for P0 and every candidate, one candidate per
+iteration, SEARCH-only selection, the 15--40/patience-8 schedule, and mandatory
+paired FINAL after offline freeze. Obsolete staged behavior is no longer an
+importable or documented execution path.
 
 ## 5. Current implementation map
 
-The following map is for planning only; no Milestone 0 code change is implied.
-
-| Area | Current location | Target disposition |
+| Area | Canonical location | Responsibility |
 | --- | --- | --- |
-| Configuration | `meta_harness/config.py`, `configs/meta_harness/*.json` | Replace staged protocol fields with the fixed full-search contract. |
-| Split preparation | `meta_harness/split_manager.py`, `scripts/prepare_meta_harness_data.py` | Implement exact two-way deterministic paper-disjoint allocation. |
-| Hard-search selection | `meta_harness/hard_search.py` | Obsolete for the new protocol; retain untouched until legacy removal. |
-| Evaluation | `meta_harness/evaluator.py` | Reuse production request/parser boundaries; add full-SEARCH identity/cache behavior. |
-| Orchestration | `meta_harness/orchestrator.py`, `meta_harness/staged_orchestrator.py` | Add a dedicated full-search orchestrator; do not make staged behavior masquerade as target behavior. |
-| Proposer | `meta_harness/proposer/codex_cli.py`, schema/feedback modules | Restrict to one prompt-text candidate and sanitized SEARCH-only feedback. |
-| Freeze/FINAL | `meta_harness/finalize.py`, `scripts/finalize_meta_harness.py` | Freeze SEARCH winner then require paired P0/P* FINAL execution. |
-| Legacy utilities | `hard_search.py`, `retry.py`, `reparse.py`, transfer scripts | Mark obsolete in documentation now; remove only in Milestone 7. |
-| Tests | `tests/meta_harness/` | Replace staged assumptions with offline full-search coverage. |
+| Configuration | `meta_harness/config.py` | Validate only the locked Full-Search v3 contract. |
+| Prompt contract | `meta_harness/prompt_family.py` | Preserve canonical prompt sources, placeholders, serialization, and hashing. |
+| Split and preparation | `meta_harness/full_search_v3.py`, `meta_harness/full_search_v3_preparation.py` | Validate SciVer input and create exact deterministic isolated artifacts. |
+| Solver execution | `meta_harness/full_search_v3_solver.py`, cache/retry/concurrency modules | Own the injected compatible HTTP boundary and safe resumable dispatch. |
+| SEARCH | `meta_harness/full_search_v3_evaluator.py`, proposer/ranking/orchestrator modules | Evaluate complete SEARCH, propose one candidate, rank, stop, lock, and resume. |
+| Freeze and FINAL | `meta_harness/full_search_v3_freeze.py`, `meta_harness/full_search_v3_final.py` | Freeze the SEARCH winner and execute isolated paired FINAL. |
+| Operator interface | `meta_harness/full_search_v3_server.py`, `scripts/run_full_search_v3_server.py`, canonical notebook | Compose the engine without duplicating experiment logic. |
+| Tests | `tests/meta_harness/test_full_search_v3*.py` | Provide offline protocol, isolation, safety, resume, and composition coverage. |
 
 ## 6. Target architecture
 
@@ -217,7 +205,7 @@ artifact paths and summaries; it does not invent a parallel layout or manage
 state itself. FINAL artifacts remain unavailable to the SEARCH and proposer
 entry points.
 
-## 8. KEEP/MODIFY/REMOVE/ADD decisions
+## 8. Final cleanup disposition
 
 ### KEEP
 
@@ -228,22 +216,15 @@ entry points.
 - Immutable candidate/prompt hashing and atomic persistence patterns where
   they meet the target contract.
 
-### MODIFY
-
-- Configuration, split manifest, CLI validation, ranking, feedback envelope,
-  cache identity, finalization, and documentation to encode the locked
-  protocol.
-- Tests that encode hard-search, staged promotion, protected validation, two
-  candidates, old iteration counts, or resource-based winner tie-breaks.
-
-### REMOVE (Milestone 7 only)
+### REMOVED
 
 - Legacy hard-search/staged protocol entry points, their configuration fields,
   obsolete tests, reparse/retry paths that only serve that protocol, and
-  transfer behavior not in this experiment contract. Removal requires a
-  compatibility audit and replacement coverage.
+  transfer behavior not in this experiment contract.
+- Superseded notebooks, compatibility fixtures, duplicate baseline snapshots,
+  and historical staged design documents. See `docs/full_search_v3_migration.md`.
 
-### ADD
+### CURRENT ADDITIONS
 
 - A protocol-specific exact-count splitter, full-SEARCH evaluator/orchestrator,
   one-candidate proposer contract, safe SEARCH cache, paired-FINAL execution
@@ -332,6 +313,10 @@ then audit privacy/security, frozen prompts/images/parser behavior,
 SEARCH/FINAL isolation, and server-clone readiness. The repository must be
 ready to clone on the server.
 
+Status: complete. Replacement coverage and the complete offline suite passed;
+only the canonical server notebook and Full-Search v3 experiment entry points
+remain. No live SMOKE, SEARCH, or FINAL execution was performed.
+
 The real full SEARCH/FINAL experiment is deliberately deferred until the
 codebase and notebook are complete. It is performed by the operator only after
 they clone/pull the finalized Git commit, configure dataset/workspace and
@@ -408,11 +393,11 @@ are deferred until the repository and notebook are finalized.
   over identical 1,000 IDs, with no influence on SEARCH or P*.
 - Resume, retry, concurrency, cache, redaction, live gating, and no-network
   test requirements are verified offline.
-- The repository exposes callable preparation, preflight, SEARCH, freeze, and
-  FINAL entry points, and the server notebook is a thin launcher that reuses
-  them without duplicating experiment logic.
-- Legacy staged behavior is either kept clearly separate during migration or
-  removed only in Milestone 7 with replacement coverage.
+- The repository exposes callable preparation, preflight, isolated SMOKE,
+  SEARCH, freeze, and FINAL entry points. Production SEARCH requires the
+  compatible create-once SMOKE receipt, and the server notebook is a thin
+  launcher that reuses these APIs without duplicating experiment logic.
+- Legacy staged behavior was removed in Milestone 7 after replacement coverage.
 
 ## 15. Server preflight requirements
 
@@ -472,4 +457,4 @@ passes the durable run identity to repository entry points for resume.
 - [x] M4: one-candidate proposer and SEARCH orchestrator implemented.
 - [x] M5: offline freeze and isolated paired FINAL implemented.
 - [x] M6: thin server notebook and execution interface implemented.
-- [ ] M7: legacy removal and final offline verification completed.
+- [x] M7: legacy removal and final offline verification completed.

@@ -17,10 +17,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 from utils.constant import COT_PROMPT
 from utils.cli_environment import load_cli_environment
-from utils.prompt_registry import (
-    get_prompt_family,
-    register_frozen_prompt_family,
-)
 
 
 PROMPT_DICT = {
@@ -96,14 +92,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         required=True,
     )
     parser.add_argument("--prompt", type=str, default="cot")
-    parser.add_argument(
-        "--meta-cot-artifact",
-        type=Path,
-        help=(
-            "Verified frozen_winner.json to register when --prompt meta_cot "
-            "is selected."
-        ),
-    )
     parser.add_argument("--method", choices=REMOTE_METHODS, default="cot")
     parser.add_argument(
         "--output_dir",
@@ -278,18 +266,10 @@ def _run_remote(arguments: argparse.Namespace) -> int:
 
     if arguments.dataset is None:
         raise ValueError("--dataset is required with --provider remote")
-    meta_cot_artifact = getattr(arguments, "meta_cot_artifact", None)
-    if meta_cot_artifact is not None:
-        if arguments.prompt != "meta_cot":
-            raise ValueError(
-                "--meta-cot-artifact requires --prompt meta_cot"
-            )
-        register_frozen_prompt_family(meta_cot_artifact)
-    elif arguments.prompt == "meta_cot":
-        raise ValueError(
-            "--prompt meta_cot requires --meta-cot-artifact"
-        )
-    prompt_family = get_prompt_family(arguments.prompt)
+    try:
+        prompt_family = PROMPT_DICT[arguments.prompt]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"Invalid prompt: {arguments.prompt!r}") from exc
     if arguments.n != 1:
         raise ValueError("remote inference requires --n 1")
     validate_model_identifier(arguments.model)
@@ -455,12 +435,6 @@ def cli(argv: Sequence[str] | None = None) -> int:
         return 2
     if arguments.dataset is not None:
         print("error: --dataset requires --provider remote", file=sys.stderr)
-        return 2
-    if arguments.meta_cot_artifact is not None:
-        print(
-            "error: --meta-cot-artifact requires --provider remote",
-            file=sys.stderr,
-        )
         return 2
     return _legacy_cli(arguments)
 

@@ -7,11 +7,12 @@ from meta_harness.prompt_family import (
     PromptFamily,
     REQUIRED_PLACEHOLDERS,
     TEMPLATE_KEYS,
+    canonical_baseline_sources,
     deserialize_prompt_family,
     serialize_prompt_family,
+    template_source_sha256,
 )
 from utils.constant import COT_PROMPT
-from utils.prompt_registry import get_prompt_family
 
 
 def _sources():
@@ -40,11 +41,13 @@ def test_serialization_is_deterministic_and_round_trips_templates():
     } == _sources()
 
 
-def test_cot_registry_returns_the_original_mapping_and_unknown_is_clear():
-    assert get_prompt_family("cot") is COT_PROMPT
+def test_canonical_sources_and_hash_are_derived_from_unchanged_cot():
+    sources = canonical_baseline_sources()
 
-    with pytest.raises(ValueError, match="Unknown prompt family.*meta_cot"):
-        get_prompt_family("meta_cot")
+    assert sources == _sources()
+    assert template_source_sha256(sources) == template_source_sha256(COT_PROMPT)
+    with pytest.raises(TypeError):
+        sources["direct"] = "changed"
 
 
 @pytest.mark.parametrize("missing", TEMPLATE_KEYS)

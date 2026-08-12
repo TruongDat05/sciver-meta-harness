@@ -10,7 +10,6 @@ from types import MappingProxyType
 import pytest
 from PIL import Image
 
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.full_search_v3 import validate_sciver_full_search_v3_records
 from meta_harness.full_search_v3_evaluator import FullSearchV3SearchInput
 from meta_harness.full_search_v3_final import (
@@ -31,7 +30,11 @@ from meta_harness.full_search_v3_proposer import (
     FullSearchV3ProposalResult,
 )
 from meta_harness.full_search_v3_solver import SolverResult, solver_request_payload_sha256
-from meta_harness.schemas import canonical_json, template_source_sha256
+from meta_harness.prompt_family import (
+    canonical_baseline_sources,
+    canonical_json,
+    template_source_sha256,
+)
 from utils.dataset_adapters import get_dataset_adapter
 
 
@@ -301,8 +304,3 @@ def test_prepare_search_freeze_paired_final_resume_and_isolation(
         assert receipt["variants"][0]["prompt_sha256"] == receipt["variants"][1]["prompt_sha256"]
     else:
         assert receipt["variants"][0]["prompt_sha256"] != receipt["variants"][1]["prompt_sha256"]
-
-
-def test_v3_final_execution_never_uses_legacy_finalization_module():
-    source = Path(__file__).resolve().parents[2] / "meta_harness" / "full_search_v3_final.py"
-    assert "meta_harness.finalize" not in source.read_text(encoding="utf-8")

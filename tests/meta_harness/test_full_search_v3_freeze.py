@@ -9,7 +9,6 @@ from types import MappingProxyType
 
 import pytest
 
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.config import FULL_SEARCH_V3_PROTOCOL_ID, FULL_SEARCH_V3_SEARCH_SIZE
 from meta_harness.full_search_v3_evaluator import (
     FullSearchV3SearchInput,
@@ -27,7 +26,11 @@ from meta_harness.full_search_v3_proposer import (
     FullSearchV3Candidate,
     FullSearchV3ProposalResult,
 )
-from meta_harness.schemas import canonical_json, template_source_sha256
+from meta_harness.prompt_family import (
+    canonical_baseline_sources,
+    canonical_json,
+    template_source_sha256,
+)
 
 
 def _search_input():

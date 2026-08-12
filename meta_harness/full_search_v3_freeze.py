@@ -18,7 +18,6 @@ import re
 import tempfile
 from typing import Any
 
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.config import (
     FULL_SEARCH_V3_MAX_ITERATIONS,
     FULL_SEARCH_V3_MIN_ITERATIONS,
@@ -41,8 +40,13 @@ from meta_harness.full_search_v3_ranking import (
     eligible_full_search_v3_candidate,
     rank_eligible_full_search_v3_reports,
 )
-from meta_harness.prompt_family import TEMPLATE_KEYS, PromptFamily
-from meta_harness.schemas import canonical_json, template_source_sha256
+from meta_harness.prompt_family import (
+    TEMPLATE_KEYS,
+    PromptFamily,
+    canonical_baseline_sources,
+    canonical_json,
+    template_source_sha256,
+)
 
 
 FULL_SEARCH_V3_FREEZE_SCHEMA_VERSION = "sciver_full_search_v3_freeze_v1"

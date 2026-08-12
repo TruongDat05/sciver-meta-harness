@@ -1,12 +1,9 @@
 import copy
 import json
 from pathlib import Path
-import subprocess
 
 import pytest
 
-import scripts.prepare_meta_harness_data as prepare_cli
-from meta_harness.config import canonical_full_search_v3_config
 from meta_harness.full_search_v3 import (
     build_full_search_v3_split,
     validate_sciver_full_search_v3_records,
@@ -325,68 +322,6 @@ def test_search_safe_loader_never_returns_private_final_membership(
     assert set(loaded["SEARCH"]["sample_ids"]).isdisjoint(
         private_manifest["split"]["FINAL"]["sample_ids"]
     )
-
-
-def test_v3_preparation_cli_is_offline_and_uses_production_contract(
-    tmp_path, monkeypatch, capsys
-):
-    secret_marker = "NOT_A_REAL_SECRET"
-    monkeypatch.setenv("API_KEY", secret_marker)
-    monkeypatch.setenv("API_URL", "http://not-used.invalid")
-    subprocess_boundary = pytest.MonkeyPatch()
-    try:
-        subprocess_boundary.setattr(
-            subprocess,
-            "run",
-            lambda *args, **kwargs: (_ for _ in ()).throw(
-                AssertionError("preparation invoked a subprocess")
-            ),
-        )
-        assert prepare_cli.cli(
-            [
-                "--protocol",
-                "sciver_full_search_v3",
-                "--dataset-path",
-                str(TESTSET_PATH),
-                "--v3-private-dir",
-                str(tmp_path / "trusted"),
-                "--v3-search-dir",
-                str(tmp_path / "search"),
-            ]
-        ) == 0
-    finally:
-        subprocess_boundary.undo()
-    summary = json.loads(capsys.readouterr().out)
-    private = load_trusted_full_search_v3_private_manifest(
-        tmp_path / "trusted" / "private_split_manifest.json"
-    )
-    safe = load_full_search_v3_search_safe_manifest(
-        tmp_path / "search" / "search_safe_manifest.json"
-    )
-    records = load_full_search_v3_search_dataset(
-        tmp_path / "search" / "search_records.json"
-    )
-
-    assert canonical_full_search_v3_config().split_seed == 42
-    assert (
-        private["split"]["SEARCH"]["sample_count"]
-        == summary["SEARCH"]["sample_count"]
-        == 1000
-    )
-    assert (
-        private["split"]["FINAL"]["sample_count"]
-        == summary["FINAL"]["sample_count"]
-        == 1000
-    )
-    assert summary["split_sha256"] == private["split"]["split_sha256"]
-    assert [record["sample_id"] for record in records] == safe["SEARCH"]["sample_ids"]
-    assert secret_marker not in json.dumps(summary)
-    assert secret_marker not in (
-        tmp_path / "trusted" / "private_split_manifest.json"
-    ).read_text()
-    assert secret_marker not in (
-        tmp_path / "search" / "search_safe_manifest.json"
-    ).read_text()
 
 
 def test_search_dataset_verification_rejects_missing_duplicate_and_reordered_rows(

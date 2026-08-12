@@ -40,11 +40,11 @@ Enter `API_URL` and `API_KEY` only after opening the notebook. The notebook read
 
 Run the preparation and SEARCH preflight cells before authorizing live work. They validate exact split counts, paper disjointness, hashes, model/generation/parser identity, workload budgets, checkpoint locations, and compatible resume state. Preflight constructs neither a live solver nor a proposer client.
 
-Keep `RUN_SEARCH = False` until the preflight has been reviewed and live SEARCH has been explicitly authorized. `RUN_FINAL` is independent and remains `False` until separate FINAL authorization.
+Keep `RUN_SMOKE = False`, `RUN_FULL_SEARCH = False`, and `RUN_FINAL = False` until each stage is separately authorized. SMOKE makes exactly one canonical P0 request from SEARCH, persists only a create-once compatible receipt under the run's isolated `smoke` directory, and never opens FINAL or production SEARCH state.
 
 ## SEARCH operation and monitoring
 
-After explicit authorization, set `RUN_SEARCH = True` and rerun the guarded SEARCH cell. The same repository/workspace/run ID resumes only a compatible durable SEARCH state. Inspect progress through the notebook's SEARCH status cell; it displays only aggregate state, metrics, hashes, and artifact locations.
+After explicit SMOKE authorization, set `RUN_SMOKE = True` and create or verify the receipt. Then obtain separate production authorization, set `RUN_FULL_SEARCH = True`, and rerun the guarded FULL_SEARCH cell. SEARCH fails closed if its SMOKE receipt is missing or incompatible. The same repository/workspace/run ID resumes only compatible durable SEARCH state. Inspect progress through the notebook's SEARCH status cell; it displays only aggregate state, metrics, hashes, and artifact locations.
 
 For terminal operation, use the thin command wrapper. It never accepts credentials as arguments; any live request uses only inherited process `API_URL` and `API_KEY` values:
 
@@ -54,6 +54,12 @@ python scripts/run_full_search_v3_server.py search-preflight \
   --search-safe-manifest <search-safe-manifest> \
   --search-records <search-records> --source-commit <pinned-sha>
 
+python scripts/run_full_search_v3_server.py smoke \
+  --repository-root <repository> --run-id <run-id> \
+  --search-safe-manifest <search-safe-manifest> \
+  --search-records <search-records> --source-commit <pinned-sha> \
+  --live-smoke
+
 python scripts/run_full_search_v3_server.py search \
   --repository-root <repository> --run-id <run-id> \
   --search-safe-manifest <search-safe-manifest> \
@@ -61,7 +67,7 @@ python scripts/run_full_search_v3_server.py search \
   --live-search
 ```
 
-Without `--live-search`, the command fails closed before reading credentials or dispatching. Its JSON output is sanitized and may be redirected to a run-local operator log; do not redirect shell environment dumps or notebook output. Check a process lock before starting another runner:
+Without `--live-smoke` or `--live-search`, the corresponding command fails closed before reading credentials or dispatching. Neither flag authorizes the other. JSON output is sanitized and may be redirected to a run-local operator log; do not redirect shell environment dumps or notebook output. Check a process lock before starting another runner:
 
 ```bash
 python scripts/run_full_search_v3_server.py activity \

@@ -21,7 +21,6 @@ import tempfile
 from types import MappingProxyType
 from typing import Any
 
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.config import (
     DEFAULT_PROPOSER_MODEL,
     DEFAULT_PROPOSER_REASONING_EFFORT,
@@ -34,8 +33,10 @@ from meta_harness.prompt_family import (
     InvalidPromptFamilyError,
     PromptFamily,
     TEMPLATE_KEYS,
+    canonical_baseline_sources,
+    canonical_json,
+    template_source_sha256,
 )
-from meta_harness.schemas import canonical_json, template_source_sha256
 
 
 FULL_SEARCH_V3_PROPOSER_SCHEMA_VERSION = 1

@@ -1,5 +1,4 @@
 import base64
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,16 +6,9 @@ from PIL import Image
 import pytest
 
 import main as cli_module
-from meta_harness.baseline import (
-    BaselinePromptDriftError,
-    canonical_baseline_json,
-    export_baseline_snapshot,
-    validate_baseline_snapshot,
-)
 from meta_harness.prompt_family import (
     PromptFamily,
-    load_prompt_family,
-    serialize_prompt_family,
+    canonical_baseline_sources,
 )
 from model_inference import remote_api
 from model_inference.remote_api import (
@@ -25,16 +17,9 @@ from model_inference.remote_api import (
 )
 from utils.answer_parser import parse_answer
 from utils.constant import COT_PROMPT
-from utils.prompt_registry import get_prompt_family
 
 
 MODEL = "gemma-4-26B-A4B-it"
-SNAPSHOT_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "prompts"
-    / "meta_harness"
-    / "baseline_cot.json"
-)
 REASONING_CASES = (
     ("direct", {"caption": "Primary caption."}, 1),
     ("analytical", {"caption": "Primary caption."}, 1),
@@ -112,19 +97,6 @@ def _synthetic_family():
     )
 
 
-def test_baseline_snapshot_reconstructs_exact_cot_template_sources():
-    snapshot = load_prompt_family(SNAPSHOT_PATH)
-
-    assert validate_baseline_snapshot(SNAPSHOT_PATH) == SNAPSHOT_PATH
-    assert {
-        method: snapshot[method].template for method in snapshot
-    } == {
-        method: COT_PROMPT[method].template for method in COT_PROMPT
-    }
-    assert SNAPSHOT_PATH.read_text(encoding="utf-8") == canonical_baseline_json()
-    assert canonical_baseline_json() == serialize_prompt_family(COT_PROMPT)
-
-
 @pytest.mark.parametrize(
     ("method", "captions", "_expected_image_count"), REASONING_CASES
 )
@@ -133,7 +105,7 @@ def test_baseline_raw_and_rendered_templates_match_canonical_cot(
     captions,
     _expected_image_count,
 ):
-    snapshot = load_prompt_family(SNAPSHOT_PATH)
+    snapshot = PromptFamily(canonical_baseline_sources())
     values = {
         "claim": "Exact claim\nwith preserved punctuation.",
         "context": "Exact context: α, β, and $literal.",
@@ -144,27 +116,6 @@ def test_baseline_raw_and_rendered_templates_match_canonical_cot(
     assert snapshot[method].substitute(**values) == COT_PROMPT[
         method
     ].substitute(**values)
-
-
-def test_baseline_export_helper_repairs_drift_from_canonical_source(tmp_path):
-    destination = tmp_path / "baseline_cot.json"
-    destination.write_text(
-        canonical_baseline_json().replace(
-            "critically evaluate",
-            "silently changed",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(BaselinePromptDriftError, match="differs from COT_PROMPT"):
-        validate_baseline_snapshot(destination)
-
-    assert export_baseline_snapshot(destination) == destination
-    assert destination.read_text(encoding="utf-8") == canonical_baseline_json()
-    assert validate_baseline_snapshot(destination) == destination
-
-
 @pytest.mark.parametrize(
     ("method", "captions", "expected_image_count"), REASONING_CASES
 )
@@ -172,8 +123,8 @@ def test_cot_model_visible_request_is_exactly_baseline_equivalent(
     image_paths, method, captions, expected_image_count
 ):
     record = _record(method, image_paths)
-    snapshot_family = load_prompt_family(SNAPSHOT_PATH)
-    selected_family = get_prompt_family("cot")
+    snapshot_family = PromptFamily(canonical_baseline_sources())
+    selected_family = COT_PROMPT
     raw_response = "Reasoning. Therefore, the final answer is: Answer: yes"
     baseline_client = Mock()
     selected_client = Mock()
@@ -226,7 +177,7 @@ def test_alternative_family_changes_only_text_block(
     record = _record(method, image_paths)
     original_record = dict(record)
 
-    baseline = prepare_remote_requests([record], get_prompt_family("cot"))[0]
+    baseline = prepare_remote_requests([record], COT_PROMPT)[0]
     alternative = prepare_remote_requests([record], _synthetic_family())[0]
 
     baseline_content = _content(baseline)
@@ -244,8 +195,7 @@ def test_remote_cli_paths_use_the_once_resolved_prompt_family(
     tmp_path, image_paths, monkeypatch, dry_run
 ):
     alternative = _synthetic_family()
-    resolver = Mock(return_value=alternative)
-    monkeypatch.setattr(cli_module, "get_prompt_family", resolver)
+    monkeypatch.setitem(cli_module.PROMPT_DICT, "synthetic", alternative)
 
     sample = SimpleNamespace(
         sample_id="sample-1",
@@ -296,7 +246,6 @@ def test_remote_cli_paths_use_the_once_resolved_prompt_family(
 
     assert cli_module._run_remote(arguments) == 0
 
-    resolver.assert_called_once_with("synthetic")
     assert prepared_families == [alternative]
     if dry_run:
         client_factory.assert_not_called()

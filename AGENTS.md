@@ -131,8 +131,8 @@ official live experiment and is not an active or compatible protocol.
   safe SEARCH cache. Tests must stay offline and mock both HTTP and Codex
   subprocess boundaries; tests must never recursively invoke Codex.
 - Legacy hard-search, staged, protected-validation, retry/reparse, and
-  transfer modules are obsolete for this protocol. Do not delete or alter them
-  unless a later authorized milestone explicitly does so.
+  transfer modules were removed in the authorized Milestone 7 cleanup. Do not
+  reintroduce or route current workflows through those designs.
 - Maximum logical workload is 41,000 SEARCH evaluations (1,000 P0 plus 40,000
   candidate evaluations), 2,000 FINAL evaluations (1,000 each for P0 and P*),
   and 43,000 overall. Transport retries are excluded from these counts.

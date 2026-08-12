@@ -169,45 +169,25 @@ coverage and failures, plus macro-average Accuracy across datasets.
 
 Live access is always explicit and requires `--live-api`. See the
 [remote benchmark guide](docs/remote-benchmark.md) for architecture, safe
-credential setup, smoke/pilot/full/resume commands, Kaggle instructions,
-result schema, evaluation, retries, checkpoints, cost controls, and extension
-guidance. A guarded [Kaggle notebook](notebooks/kaggle_remote_benchmark.ipynb)
-is also included; its default **Run All** does not read API credentials or send
-remote benchmark requests.
+credential setup, smoke/pilot/full/resume commands, result schema, evaluation,
+retries, checkpoints, cost controls, and extension guidance.
 
-### Meta-Harness prompt search
+### Full-Search v3 prompt search
 
-The additive Meta-Harness workflow evolves only the four SciVer prompt
-templates. It keeps the solver, split, request preparation, evidence order,
-parser, metrics, and original `cot` prompts fixed. Search evaluates the
-baseline and every candidate on one immutable validation split, maintains a
-Macro-F1/resource Pareto frontier, supports atomic resume, and freezes the
-validation winner as the separate `meta_cot` prompt variant.
+The supported prompt-only experiment is `sciver_full_search_v3`. Use the
+[canonical server notebook](notebooks/sciver_full_search_v3_server.ipynb) for
+normal operation or the thin
+[`run_full_search_v3_server.py`](scripts/run_full_search_v3_server.py) wrapper
+for terminal operation. Both delegate preparation, isolated SMOKE receipt
+validation, SEARCH, resume, freeze, paired FINAL, and sanitized status
+reporting to the same repository interface.
 
-Prepare the paper-disjoint split and validate the planned workload entirely
-offline:
-
-```bash
-python scripts/prepare_meta_harness_data.py \
-  --config configs/meta_harness/sciver_gemma_codex.example.json \
-  --dataset-path /absolute/path/to/SciVer/testset.json \
-  --split-manifest workspace/meta_harness/data/sciver_split.json \
-  --validation-output workspace/meta_harness/data/sciver_validation.json
-
-python scripts/run_meta_harness.py \
-  --config configs/meta_harness/sciver_gemma_codex.example.json \
-  --split-manifest workspace/meta_harness/data/sciver_split.json \
-  --dataset-path workspace/meta_harness/data/sciver_validation.json \
-  --run-id sciver-gemma-meta-dry-run \
-  --dry-run
-```
-
-Dry-run creates no run state and calls neither the proposer nor the solver.
-Live search, resume, winner freezing, guarded final-test execution, frozen
-prompt registration, and exact three-model transfer are documented in the
-[Meta-Harness guide](docs/meta-harness.md). For a copy-paste terminal workflow,
-cost/final-test warnings, artifact locations, and troubleshooting, use the
-[Meta-Harness terminal guide](docs/meta_harness_terminal_guide.md).
+The workflow keeps canonical `cot`, request construction, image order, parser,
+metrics, and solver generation behavior fixed. It evaluates P0 and each prompt
+candidate on the complete immutable SEARCH split, freezes the SEARCH-only
+winner as additive `meta_cot`, and requires separate authorization for paired
+FINAL. See the [server operations guide](docs/sciver_full_search_v3_server_operations.md)
+and the [legacy removal note](docs/full_search_v3_migration.md).
 
 ------
 

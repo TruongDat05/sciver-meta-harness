@@ -11,7 +11,6 @@ from PIL import Image
 
 import meta_harness.full_search_v3_final as final_module
 import meta_harness.full_search_v3_server as server
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.config import canonical_full_search_v3_config
 from meta_harness.full_search_v3_evaluator import (
     FullSearchV3SearchInput,
@@ -31,7 +30,7 @@ from meta_harness.full_search_v3_solver import (
     SolverRequest,
     SolverResult,
 )
-from meta_harness.schemas import template_source_sha256
+from meta_harness.prompt_family import canonical_baseline_sources, template_source_sha256
 from utils.constant import COT_PROMPT
 
 
@@ -195,7 +194,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
     monkeypatch.setattr(
         server,
         "_construct_live_solver",
-        lambda *_args: live_clients.append(object()) or live_clients[-1],
+        lambda *_args: live_clients.append(_FakeFinalSolver()) or live_clients[-1],
     )
 
     # The default stage gates must not construct a solver client.
@@ -238,6 +237,30 @@ def test_server_interface_end_to_end_with_fake_boundaries(
             search_safe_manifest_path=prepared["search_safe_manifest_path"],
             solver_identity_sha256=SOLVER_IDENTITY,
         )
+
+    smoke = server.run_full_search_v3_server_smoke(
+        repository_root=tmp_path,
+        run_id=RUN_ID,
+        search_safe_manifest_path=prepared["search_safe_manifest_path"],
+        search_records_path=prepared["search_dataset_path"],
+        authorize_smoke_execution=True,
+        api_url="offline-runtime-url",
+        api_key="unmistakably-fake-key",
+        source_commit=COMMIT,
+    )
+    assert smoke["status"] == "complete" and smoke["logical_calls"] == 1
+    assert len(live_clients) == 1 and len(live_clients[0].calls) == 1
+    reused_smoke = server.run_full_search_v3_server_smoke(
+        repository_root=tmp_path,
+        run_id=RUN_ID,
+        search_safe_manifest_path=prepared["search_safe_manifest_path"],
+        search_records_path=prepared["search_dataset_path"],
+        authorize_smoke_execution=True,
+        api_url="offline-runtime-url",
+        api_key="unmistakably-fake-key",
+        source_commit=COMMIT,
+    )
+    assert reused_smoke["reused"] is True and len(live_clients) == 1
 
     search = server.start_or_resume_full_search_v3_server_run(
         repository_root=tmp_path,

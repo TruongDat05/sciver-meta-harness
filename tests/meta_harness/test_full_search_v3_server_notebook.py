@@ -39,12 +39,13 @@ def test_notebook_has_all_required_operator_sections_in_order():
         "## 7. Prepare or reuse the deterministic configured split",
         "## 8. Collect runtime API values without displaying them",
         "## 9. Offline SEARCH preflight",
-        "## 10. Explicit live SEARCH guard",
-        "## 11. Inspect SEARCH progress and terminal status",
-        "## 12. Freeze the SEARCH winner only after terminal completion",
-        "## 13. FINAL preflight",
-        "## 14. Separate explicit paired FINAL guard",
-        "## 15. Sanitized aggregate results and artifact locations",
+        "## 10. Isolated SMOKE guard and compatible receipt",
+        "## 11. Explicit FULL_SEARCH guard",
+        "## 12. Inspect SEARCH progress and terminal status",
+        "## 13. Freeze the SEARCH winner only after terminal completion",
+        "## 14. FINAL preflight",
+        "## 15. Separate explicit paired FINAL guard",
+        "## 16. Sanitized aggregate results and artifact locations",
     ]
     positions = [source.index(heading) for heading in headings]
     assert positions == sorted(positions)
@@ -65,6 +66,7 @@ def test_notebook_uses_only_the_m6_interface_for_experiment_operations():
     required_calls = {
         "prepare_full_search_v3_server_run",
         "preflight_full_search_v3_server_run",
+        "run_full_search_v3_server_smoke",
         "start_or_resume_full_search_v3_server_run",
         "inspect_full_search_v3_server_status",
         "freeze_full_search_v3_server_winner",
@@ -99,8 +101,10 @@ def test_notebook_uses_pinned_checkout_runtime_credentials_and_separate_guards()
         assert f"{setting} =" in source
     assert "[\"git\", \"fetch\", \"--tags\", \"origin\", PINNED_COMMIT_SHA]" in source
     assert "[\"git\", \"checkout\", \"--detach\", PINNED_COMMIT_SHA]" in source
-    assert "RUN_SEARCH = False" in source
-    assert "if RUN_SEARCH:" in source
+    assert "RUN_SMOKE = False" in source
+    assert "if RUN_SMOKE:" in source
+    assert "RUN_FULL_SEARCH = False" in source
+    assert "if RUN_FULL_SEARCH:" in source
     assert "RUN_FINAL = False" in source
     assert "if RUN_FINAL and frozen_winner is not None:" in source
     assert "getpass(\"API_KEY (runtime only): \")" in source
@@ -123,7 +127,7 @@ def test_notebook_has_no_embedded_secret_output_or_private_final_content():
     assert not re.search(r"(?:sk|key)-[A-Za-z0-9]{16,}", source)
     assert "FINAL\"][\"sample_ids\"]" not in source
     assert "sample_id" not in source
-    assert "private_manifest_path" not in source.split("## 13. FINAL preflight")[0]
+    assert "private_manifest_path" not in source.split("## 14. FINAL preflight")[0]
 
 
 def test_notebook_has_no_embedded_urls():

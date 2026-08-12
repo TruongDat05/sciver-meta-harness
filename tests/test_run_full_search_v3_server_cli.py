@@ -28,6 +28,12 @@ def _search_arguments(*extra: str) -> list[str]:
     ]
 
 
+def _smoke_arguments(*extra: str) -> list[str]:
+    arguments = _search_arguments(*extra)
+    arguments[0] = "smoke"
+    return arguments
+
+
 def test_argument_validation_rejects_missing_required_arguments_and_has_no_credentials():
     parser = cli_module.build_argument_parser()
     assert "api-key" not in parser.format_help().lower()
@@ -76,6 +82,37 @@ def test_live_search_delegates_once_to_m6_without_credential_arguments(monkeypat
         }
     ]
     assert json.loads(messages[0])["search"]["status"] == "running"
+
+
+def test_smoke_is_offline_by_default_and_live_flag_delegates_once(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        cli_module,
+        "run_full_search_v3_server_smoke",
+        lambda **kwargs: calls.append(kwargs) or {"status": "complete"},
+    )
+    offline_messages = []
+    assert cli_module.cli(_smoke_arguments(), output=offline_messages.append) == 2
+    assert calls == []
+    assert "offline by default" in offline_messages[0]
+
+    live_messages = []
+    assert (
+        cli_module.cli(
+            _smoke_arguments("--live-smoke"), output=live_messages.append
+        )
+        == 0
+    )
+    assert calls == [
+        {
+            "repository_root": "/safe/repository",
+            "run_id": "safe-run",
+            "search_safe_manifest_path": "/safe/search/manifest.json",
+            "search_records_path": "/safe/search/records.json",
+            "source_commit": COMMIT,
+            "authorize_smoke_execution": True,
+        }
+    ]
 
 
 def test_cli_logs_redact_sensitive_values_and_transport_text(monkeypatch):

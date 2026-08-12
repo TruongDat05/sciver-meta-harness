@@ -62,12 +62,19 @@ from meta_harness.full_search_v3_proposer import (
 )
 from meta_harness.full_search_v3_retry import SolverRetryPolicy
 from meta_harness.full_search_v3_solver import create_live_solver_client
-from meta_harness.schemas import canonical_json
-from utils.answer_parser import PARSER_VERSION
+from meta_harness.full_search_v3_solver import (
+    build_solver_request,
+    execute_solver_request,
+    solver_request_payload_sha256,
+)
+from meta_harness.prompt_family import canonical_json
+from utils.answer_parser import PARSER_VERSION, parse_answer
+from utils.constant import COT_PROMPT
 
 
 _COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SMOKE_RECEIPT_SCHEMA_VERSION = "sciver_full_search_v3_smoke_receipt_v1"
 
 
 class FullSearchV3ServerError(RuntimeError):
@@ -206,6 +213,12 @@ def start_or_resume_full_search_v3_server_run(
         search_safe_manifest_path=search_safe_manifest_path,
         search_records_path=search_records_path,
     )
+    _require_compatible_smoke_receipt(
+        repository_root=repository_root,
+        run_id=run_id,
+        preflight=preflight,
+        search_input=search_input,
+    )
     client = _construct_live_solver(runtime_url, runtime_key)
     run_directory = _run_directory(repository_root, run_id)
     cache = FullSearchV3SearchCache(run_directory / "search_cache")
@@ -230,6 +243,79 @@ def start_or_resume_full_search_v3_server_run(
         ),
     ).run()
     return {"preflight": preflight, "search": _search_status(state, run_id)}
+
+
+def run_full_search_v3_server_smoke(
+    *,
+    repository_root: str | Path,
+    run_id: str,
+    search_safe_manifest_path: str | Path,
+    search_records_path: str | Path,
+    authorize_smoke_execution: bool,
+    api_url: str | None = None,
+    api_key: str | None = None,
+    source_commit: str | None = None,
+) -> dict[str, Any]:
+    """Dispatch one canonical P0 SEARCH request into isolated SMOKE state.
+
+    The create-once receipt contains only hashes and stage metadata.  It never
+    stores the record, model-visible messages, response text, label, images,
+    endpoint, or credential.  A compatible existing receipt is idempotently
+    returned without constructing a client or redispatching.
+    """
+
+    if authorize_smoke_execution is not True:
+        raise FullSearchV3ServerAuthorizationError(
+            "SMOKE dispatch requires separate explicit SMOKE authorization"
+        )
+    runtime_url, runtime_key = _runtime_credentials(api_url=api_url, api_key=api_key)
+    solver_identity_sha256 = solver_identity_from_api_url(runtime_url)
+    preflight = preflight_full_search_v3_server_run(
+        repository_root=repository_root,
+        run_id=run_id,
+        search_safe_manifest_path=search_safe_manifest_path,
+        search_records_path=search_records_path,
+        source_commit=source_commit,
+        solver_identity_sha256=solver_identity_sha256,
+    )
+    search_input = load_full_search_v3_search_input(
+        search_safe_manifest_path=search_safe_manifest_path,
+        search_records_path=search_records_path,
+    )
+    identity, request = _smoke_identity_and_request(preflight, search_input)
+    receipt_path = full_search_v3_server_smoke_receipt_path(repository_root, run_id)
+    with _smoke_lock(receipt_path.parent / ".smoke.lock"):
+        if receipt_path.is_file():
+            receipt = _load_compatible_smoke_receipt(receipt_path, identity)
+            return _smoke_status(receipt, receipt_path, reused=True)
+
+        result = execute_solver_request(
+            _construct_live_solver(runtime_url, runtime_key), request
+        )
+        parsed = parse_answer(result.content)
+        if parsed["parse_status"] != "parsed":
+            raise FullSearchV3ServerError(
+                "SMOKE response did not satisfy the canonical answer parser; no receipt was created"
+            )
+        receipt = {
+            "schema_version": _SMOKE_RECEIPT_SCHEMA_VERSION,
+            "status": "complete",
+            "identity": identity,
+            "identity_sha256": _sha256_json(identity),
+            "logical_calls": 1,
+            "parse_status": "parsed",
+        }
+        _create_once_json(receipt_path, receipt)
+        persisted = _load_compatible_smoke_receipt(receipt_path, identity)
+        return _smoke_status(persisted, receipt_path, reused=False)
+
+
+def full_search_v3_server_smoke_receipt_path(
+    repository_root: str | Path, run_id: str
+) -> Path:
+    """Return the isolated create-once SMOKE receipt path."""
+
+    return _run_directory(repository_root, run_id) / "smoke" / "completion.json"
 
 
 def inspect_full_search_v3_server_status(
@@ -377,6 +463,7 @@ def inspect_full_search_v3_server_activity(
     return {
         "operation": "activity",
         "run_id": _run_id(run_id),
+        "smoke_lock": _lock_activity(run_directory / "smoke" / ".smoke.lock"),
         "search_lock": _lock_activity(run_directory / ".orchestration.lock"),
         "final_lock": _lock_activity(run_directory / "final" / ".final.lock"),
     }
@@ -429,6 +516,9 @@ def _search_preflight_status(
         "run_id": run_id,
         "run_directory": str(_run_directory(repository_root, run_id)),
         "checkpoints": {
+            "smoke_receipt_path": str(
+                full_search_v3_server_smoke_receipt_path(repository_root, run_id)
+            ),
             "search_state_path": str(
                 full_search_v3_orchestration_state_path(repository_root, run_id)
             ),
@@ -491,6 +581,104 @@ def _search_status(state: Mapping[str, Any], run_id: str) -> dict[str, Any]:
         "winner_metrics": winner_report,
         "run_identity_sha256": _sha256_json(state["identity"]),
     }
+
+
+def _smoke_identity_and_request(
+    preflight: Mapping[str, Any], search_input: FullSearchV3SearchInput
+) -> tuple[dict[str, Any], Any]:
+    if not search_input.records:
+        raise FullSearchV3ServerError("SMOKE requires at least one validated SEARCH record")
+    request = build_solver_request(search_input.records[0], COT_PROMPT)
+    identity = {
+        "protocol_id": preflight["protocol_id"],
+        "run_id": preflight["run_id"],
+        "source_commit": preflight["source_commit"],
+        "config_sha256": preflight["config_sha256"],
+        "split_sha256": preflight["split_sha256"],
+        "search_membership_sha256": preflight["search_membership_sha256"],
+        "search_sample_ids_sha256": preflight["search_sample_ids_sha256"],
+        "canonical_p0_prompt_sha256": preflight["canonical_p0_prompt_sha256"],
+        "solver": preflight["solver"],
+        "parser_version": preflight["parser_version"],
+        "request_payload_sha256": solver_request_payload_sha256(request),
+    }
+    return identity, request
+
+
+def _require_compatible_smoke_receipt(
+    *,
+    repository_root: str | Path,
+    run_id: str,
+    preflight: Mapping[str, Any],
+    search_input: FullSearchV3SearchInput,
+) -> None:
+    identity, _request = _smoke_identity_and_request(preflight, search_input)
+    path = full_search_v3_server_smoke_receipt_path(repository_root, run_id)
+    if not path.is_file():
+        raise FullSearchV3ServerError(
+            "SEARCH requires a compatible completed SMOKE receipt; run the isolated SMOKE stage first"
+        )
+    _load_compatible_smoke_receipt(path, identity)
+
+
+def _load_compatible_smoke_receipt(
+    path: Path, expected_identity: Mapping[str, Any]
+) -> dict[str, Any]:
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FullSearchV3ServerError(
+            "SMOKE receipt is unreadable; use a fresh run ID after inspecting the artifact"
+        ) from exc
+    expected_hash = _sha256_json(expected_identity)
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema_version") != _SMOKE_RECEIPT_SCHEMA_VERSION
+        or receipt.get("status") != "complete"
+        or receipt.get("logical_calls") != 1
+        or receipt.get("parse_status") != "parsed"
+        or receipt.get("identity") != dict(expected_identity)
+        or receipt.get("identity_sha256") != expected_hash
+    ):
+        raise FullSearchV3ServerError(
+            "SMOKE receipt is incompatible with this run, split, prompt, parser, solver, or source revision"
+        )
+    return receipt
+
+
+def _smoke_status(
+    receipt: Mapping[str, Any], path: Path, *, reused: bool
+) -> dict[str, Any]:
+    return {
+        "operation": "smoke",
+        "run_id": receipt["identity"]["run_id"],
+        "status": receipt["status"],
+        "logical_calls": receipt["logical_calls"],
+        "identity_sha256": receipt["identity_sha256"],
+        "receipt_path": str(path),
+        "reused": reused,
+    }
+
+
+def _create_once_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (canonical_json(value) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _report_for_winner(state: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -594,6 +782,25 @@ def _lock_activity(path: Path) -> str:
 
 
 @contextmanager
+def _smoke_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise FullSearchV3ServerError(
+                "another process owns the isolated SMOKE stage for this run"
+            ) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+@contextmanager
 def _runtime_environment(*, api_url: str, api_key: str) -> Iterator[None]:
     """Temporarily supply runtime-only values to the existing M2 client factory."""
 
@@ -683,12 +890,14 @@ __all__ = [
     "FullSearchV3ServerAuthorizationError",
     "FullSearchV3ServerError",
     "freeze_full_search_v3_server_winner",
+    "full_search_v3_server_smoke_receipt_path",
     "inspect_full_search_v3_server_activity",
     "inspect_full_search_v3_server_final_status",
     "inspect_full_search_v3_server_status",
     "preflight_full_search_v3_server_final",
     "preflight_full_search_v3_server_run",
     "prepare_full_search_v3_server_run",
+    "run_full_search_v3_server_smoke",
     "solver_identity_from_api_url",
     "start_or_resume_full_search_v3_server_final",
     "start_or_resume_full_search_v3_server_run",

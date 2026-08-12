@@ -28,6 +28,7 @@ from meta_harness.full_search_v3_server import (
     preflight_full_search_v3_server_final,
     preflight_full_search_v3_server_run,
     prepare_full_search_v3_server_run,
+    run_full_search_v3_server_smoke,
     start_or_resume_full_search_v3_server_final,
     start_or_resume_full_search_v3_server_run,
 )
@@ -66,6 +67,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     _search_artifact_arguments(search_preflight)
     search_preflight.add_argument("--source-commit", required=True)
     search_preflight.add_argument("--solver-identity-sha256")
+
+    smoke = subcommands.add_parser(
+        "smoke", help="explicitly run or reuse one isolated P0 SMOKE request"
+    )
+    common(smoke)
+    _search_artifact_arguments(smoke)
+    smoke.add_argument("--source-commit", required=True)
+    smoke.add_argument(
+        "--live-smoke",
+        action="store_true",
+        help="required separate authorization before the isolated SMOKE dispatch",
+    )
 
     search = subcommands.add_parser("search", help="explicitly start or resume SEARCH")
     common(search)
@@ -151,6 +164,18 @@ def _dispatch(arguments: argparse.Namespace) -> Mapping[str, Any]:
             search_records_path=arguments.search_records,
             source_commit=arguments.source_commit,
             solver_identity_sha256=arguments.solver_identity_sha256,
+        )
+    if arguments.operation == "smoke":
+        if arguments.live_smoke is not True:
+            raise FullSearchV3ServerError(
+                "SMOKE is offline by default; pass --live-smoke only after explicit authorization"
+            )
+        return run_full_search_v3_server_smoke(
+            **common,
+            search_safe_manifest_path=arguments.search_safe_manifest,
+            search_records_path=arguments.search_records,
+            source_commit=arguments.source_commit,
+            authorize_smoke_execution=True,
         )
     if arguments.operation == "search":
         if arguments.live_search is not True:

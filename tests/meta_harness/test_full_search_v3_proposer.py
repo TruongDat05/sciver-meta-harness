@@ -8,13 +8,12 @@ import subprocess
 
 import pytest
 
-from meta_harness.baseline import canonical_baseline_sources
 from meta_harness.full_search_v3_proposer import (
     FullSearchV3ProposalExhausted,
     FullSearchV3Proposer,
     build_full_search_v3_proposer_input,
 )
-from meta_harness.schemas import template_source_sha256
+from meta_harness.prompt_family import canonical_baseline_sources, template_source_sha256
 
 
 def _templates(suffix: str = "") -> dict[str, str]:

@@ -291,41 +291,12 @@ one command repeats sample identities under different run locations but the
 same logical run identifier, which can create duplicate attempt numbers or
 otherwise make the report ambiguous.
 
-## Kaggle Secrets and notebook setup
-
-The guarded notebook is
-[`notebooks/kaggle_remote_benchmark.ipynb`](../notebooks/kaggle_remote_benchmark.ipynb).
-Its default configuration has `RUN_LIVE_API = False`, so **Run All** does not
-read secrets or send live benchmark requests.
-
-1. Add one released dataset (or normalized JSON) and all referenced local
-   images as notebook inputs. SciAtomic table PNGs are generated under the run
-   output directory.
-2. In the notebook's Secrets interface, create a secret named `API_KEY` and a
-   second secret named `API_URL`. Enter the real values only in that interface.
-3. Grant the notebook access to both secrets. Do not print their values or copy
-   them into cells, output, metadata, or archives.
-4. Set `DATASET_NAME`, `DATASET_PATH`, `MODEL_NAME`, and `REQUEST_DELAY` in the
-   configuration cell. Leave `METHOD = "cot"`.
-5. Keep `RUN_LIVE_API = False` and run the offline verification and dry-run.
-6. Set `RUN_LIVE_API = True` only for the one-sample smoke test.
-7. After reviewing the smoke output, enable `RUN_PILOT` for the 20-sample
-   pilot. Enable `RUN_FULL` only in a separate session intended for the full
-   run.
-
-The notebook retrieves the two values with `UserSecretsClient` only after the
-live flag is enabled, copies them into `API_KEY` and `API_URL`, and deletes its
-temporary variables. Results are written below `/kaggle/working/results`.
-Archive and retain the checkpoint outputs before the notebook session ends.
-
 ## Why a GPU is not required
 
-Model inference happens behind the remote OpenAI-compatible API. The notebook
-CPU performs only local JSON parsing, prompt construction, PNG/JPEG validation
+Model inference happens behind the remote OpenAI-compatible API. The local
+process performs only JSON parsing, prompt construction, PNG/JPEG validation
 and encoding, HTTP I/O, result writing, and evaluation. No model weights are
-loaded or downloaded, so selecting a GPU accelerator adds no benefit to this
-workflow. The provided notebook intentionally installs only the lightweight
-remote and test dependencies.
+loaded or downloaded for this workflow.
 
 ## Output record schema
 
@@ -373,7 +344,7 @@ writer removes only that final fragment before appending. Malformed records in
 the middle of the file are rejected rather than silently ignored. HTTP retries
 within a single CLI sample attempt do not increment `attempt_count`.
 
-## Cost, rate limits, and notebook timeouts
+## Cost, rate limits, and process timeouts
 
 - A dry-run makes no billable request. A smoke test bounds the first live stage
   to one sample; the pilot bounds the next stage to 20.
@@ -385,14 +356,14 @@ within a single CLI sample attempt do not increment `attempt_count`.
   latency and outcomes before estimating a full run.
 - Set `--request-delay` to pace sample requests. It does not replace the
   client's handling of rate-limit responses. Reduce concurrency outside this
-  CLI rather than starting many notebooks against the same quota.
+  CLI rather than starting competing processes against the same quota.
 - `API_TIMEOUT_SECONDS` limits one HTTP attempt, not the whole experiment.
-  HTTP retry delays, request pacing, dataset size, and notebook startup all add
+  HTTP retry delays, request pacing, dataset size, and process startup all add
   to wall-clock time.
-- Notebook runtimes can end independently of the HTTP timeout. Use `--resume`,
+- Processes can end independently of the HTTP timeout. Use `--resume`,
   keep stage outputs separate, and archive checkpoints frequently.
 
-Do not run the entire four-dataset by four-model matrix in one notebook
+Do not run the entire four-dataset by four-model matrix in one process
 session. A single combination can already approach a session's time or quota
 limits; combining all 16 makes cost harder to bound, creates a burstier
 rate-limit profile, increases the chance that a session timeout interrupts many
