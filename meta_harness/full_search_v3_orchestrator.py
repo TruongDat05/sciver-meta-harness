@@ -683,10 +683,35 @@ def _receipt_declares_accepted(path: Path) -> bool:
     return isinstance(value, Mapping) and value.get("status") == "accepted"
 
 
+def full_search_v3_orchestration_state_path(
+    repository_root: str | Path, run_id: str
+) -> Path:
+    """Return the durable SEARCH state path for one safe V3 run identifier."""
+
+    return (
+        Path(repository_root)
+        / "workspace"
+        / "meta_harness"
+        / "full_search_v3"
+        / _identifier(run_id, "run_id")
+        / _STATE_FILENAME
+    )
+
+
+def load_full_search_v3_orchestration_state(path: str | Path) -> dict[str, Any]:
+    """Load an existing SEARCH-only state without creating or advancing a run."""
+
+    state = _load_state(Path(path))
+    _validate_state_shape(state)
+    return _copy_json(state)
+
+
 __all__ = [
     "FULL_SEARCH_V3_ORCHESTRATOR_SCHEMA_VERSION",
     "FULL_SEARCH_V3_ORCHESTRATOR_VERSION",
     "FullSearchV3OrchestrationError",
     "FullSearchV3Orchestrator",
     "FullSearchV3ResumeError",
+    "full_search_v3_orchestration_state_path",
+    "load_full_search_v3_orchestration_state",
 ]

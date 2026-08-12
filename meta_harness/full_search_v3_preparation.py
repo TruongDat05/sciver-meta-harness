@@ -435,11 +435,51 @@ def materialize_full_search_v3_search_records(
 ) -> list[dict[str, Any]]:
     """Build evaluator-side SEARCH records in immutable manifest order."""
 
+    result = _materialize_full_search_v3_stage_records(
+        records,
+        private_manifest,
+        source_path=source_path,
+        stage="SEARCH",
+    )
+    safe = derive_full_search_v3_search_safe_manifest(private_manifest)
+    verify_full_search_v3_search_dataset(result, safe)
+    return result
+
+
+def materialize_full_search_v3_final_records(
+    records: Sequence[ValidatedSciVerV3Record],
+    private_manifest: Mapping[str, Any],
+    *,
+    source_path: str | Path,
+) -> list[dict[str, Any]]:
+    """Build trusted FINAL records in immutable private-manifest order.
+
+    This helper is intentionally for the isolated FINAL execution boundary;
+    callers must not expose its returned records to SEARCH or proposer code.
+    """
+
+    return _materialize_full_search_v3_stage_records(
+        records,
+        private_manifest,
+        source_path=source_path,
+        stage="FINAL",
+    )
+
+
+def _materialize_full_search_v3_stage_records(
+    records: Sequence[ValidatedSciVerV3Record],
+    private_manifest: Mapping[str, Any],
+    *,
+    source_path: str | Path,
+    stage: str,
+) -> list[dict[str, Any]]:
     verify_full_search_v3_private_manifest(
         private_manifest,
         records=records,
         source_path=source_path,
     )
+    if stage not in {"SEARCH", "FINAL"}:
+        raise FullSearchV3PreparationError("V3 materialization stage is invalid")
     adapted = get_dataset_adapter("SciVer").load(source_path)
     if len(adapted) != len(records):
         raise FullSearchV3PreparationError(
@@ -452,16 +492,13 @@ def materialize_full_search_v3_search_records(
         if checked.sample_id in by_sample_id:
             raise FullSearchV3PreparationError("V3 source produced duplicate sample IDs")
         by_sample_id[checked.sample_id] = materialized
-    search_ids = private_manifest["split"]["SEARCH"]["sample_ids"]
+    stage_ids = private_manifest["split"][stage]["sample_ids"]
     try:
-        result = [by_sample_id[sample_id] for sample_id in search_ids]
+        return [by_sample_id[sample_id] for sample_id in stage_ids]
     except KeyError as exc:
         raise FullSearchV3PreparationError(
-            "V3 SEARCH membership references an absent normalized source record"
+            f"V3 {stage} membership references an absent normalized source record"
         ) from exc
-    safe = derive_full_search_v3_search_safe_manifest(private_manifest)
-    verify_full_search_v3_search_dataset(result, safe)
-    return result
 
 
 def verify_full_search_v3_search_dataset(
@@ -754,6 +791,7 @@ __all__ = [
     "load_full_search_v3_search_dataset",
     "load_full_search_v3_search_safe_manifest",
     "load_trusted_full_search_v3_private_manifest",
+    "materialize_full_search_v3_final_records",
     "materialize_full_search_v3_search_records",
     "prepare_full_search_v3",
     "save_full_search_v3_private_manifest",
