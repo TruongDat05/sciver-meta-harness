@@ -4,7 +4,6 @@ __pycache__/
 .vscode/
 .env
 .env.*
-!.env.example
 
 # Local Meta-Harness datasets, search state, traces, and final-test artifacts.
 workspace/meta_harness/

@@ -16,6 +16,7 @@ from model_inference.remote_client import (
     RetrySettings,
     ServerError,
     UnexpectedResponseSchemaError,
+    build_compatible_api_endpoints,
 )
 
 
@@ -217,7 +218,7 @@ def test_permanent_client_errors_are_not_retried(status_code, exception_type):
     session.post.assert_called_once()
 
 
-def test_http_error_exposes_bounded_response_diagnostics_for_safe_persistence():
+def test_http_error_does_not_expose_response_body_diagnostics():
     session = Mock()
     session.post.return_value = _response(
         400,
@@ -233,12 +234,185 @@ def test_http_error_exposes_bounded_response_diagnostics_for_safe_persistence():
         _client(session).create_chat_completion(MODEL, MESSAGES)
 
     assert raised.value.http_status_code == 400
-    assert raised.value.response_error_code == "invalid_image"
-    assert (
-        raised.value.response_error_message
-        == "The image dimensions are unsupported."
-    )
+    assert raised.value.response_error_code is None
+    assert raised.value.response_error_message is None
     assert "unsupported" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "models_url", "chat_url"),
+    [
+        (
+            " https://invalid.example.test/api/// ",
+            "https://invalid.example.test/api/models",
+            "https://invalid.example.test/api/chat/completions",
+        ),
+        (
+            "https://invalid.example.test//nested///base/",
+            "https://invalid.example.test/nested/base/models",
+            "https://invalid.example.test/nested/base/chat/completions",
+        ),
+    ],
+)
+def test_base_url_joining_normalizes_without_inserting_v1(
+    base_url, models_url, chat_url
+):
+    endpoints = build_compatible_api_endpoints(base_url)
+
+    assert endpoints.models_url == models_url
+    assert endpoints.chat_completions_url == chat_url
+    assert "/v1/" not in endpoints.models_url
+    assert "/v1/" not in endpoints.chat_completions_url
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://user:pass@invalid.example.test/base",
+        "https://invalid.example.test/base?query=value",
+        "https://invalid.example.test/base#fragment",
+    ],
+)
+def test_base_url_rejects_unsafe_components(base_url):
+    with pytest.raises(InvalidConfigurationError):
+        build_compatible_api_endpoints(base_url)
+
+
+def test_base_url_client_gets_models_and_posts_valid_json_to_exact_paths():
+    session = Mock()
+    session.get.return_value = _response(
+        body={
+            "object": "list",
+            "data": [
+                {"id": " locked-model "},
+                {"id": "locked-model"},
+                {"id": ""},
+                {"missing": "id"},
+                "invalid",
+            ],
+        }
+    )
+    session.post.return_value = _response()
+    client = RemoteChatCompletionsClient.from_base_url(
+        api_key=f"  {FAKE_API_KEY}  ",
+        api_url=" https://invalid.example.test/base/// ",
+        timeout=7.5,
+        retry_settings=RetrySettings(max_retries=0),
+        session=session,
+    )
+
+    assert client.list_model_ids() == ("locked-model",)
+    client.create_chat_completion(
+        MODEL,
+        MESSAGES,
+        generation_options={"temperature": 0, "top_p": 1},
+    )
+
+    session.get.assert_called_once_with(
+        "https://invalid.example.test/base/models",
+        headers={"Authorization": f"Bearer {FAKE_API_KEY}"},
+        timeout=7.5,
+    )
+    session.post.assert_called_once_with(
+        "https://invalid.example.test/base/chat/completions",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {FAKE_API_KEY}",
+        },
+        json={
+            "model": MODEL,
+            "messages": MESSAGES,
+            "stream": False,
+            "temperature": 0,
+            "top_p": 1,
+        },
+        timeout=7.5,
+    )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "exception_type"),
+    [(401, AuthenticationError), (403, PermissionDeniedError)],
+)
+def test_model_list_authentication_and_permission_fail_closed_without_retry(
+    status_code, exception_type
+):
+    session = Mock()
+    session.get.return_value = _response(status_code)
+    client = RemoteChatCompletionsClient.from_base_url(
+        api_key=FAKE_API_KEY,
+        api_url="https://invalid.example.test/base",
+        retry_settings=RetrySettings(max_retries=3),
+        session=session,
+    )
+
+    with pytest.raises(exception_type):
+        client.list_model_ids()
+
+    session.get.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"data": {}},
+        {"data": [None, {}, {"id": ""}]},
+        {"object": "unexpected", "data": [{"id": "model"}]},
+    ],
+)
+def test_model_list_incompatible_schema_fails_closed(body):
+    session = Mock()
+    session.get.return_value = _response(body=body)
+    client = RemoteChatCompletionsClient.from_base_url(
+        api_key=FAKE_API_KEY,
+        api_url="https://invalid.example.test/base",
+        retry_settings=RetrySettings(max_retries=0),
+        session=session,
+    )
+
+    with pytest.raises(UnexpectedResponseSchemaError):
+        client.list_model_ids()
+
+
+def test_model_list_invalid_json_and_timeout_fail_closed_without_payload_exposure():
+    malformed_session = Mock()
+    malformed = _response()
+    malformed.json.side_effect = ValueError(FAKE_API_KEY)
+    malformed_session.get.return_value = malformed
+    malformed_client = RemoteChatCompletionsClient.from_base_url(
+        api_key=FAKE_API_KEY,
+        api_url="https://invalid.example.test/base",
+        retry_settings=RetrySettings(max_retries=0),
+        session=malformed_session,
+    )
+
+    with pytest.raises(MalformedJSONError) as malformed_error:
+        malformed_client.list_model_ids()
+    assert FAKE_API_KEY not in str(malformed_error.value)
+
+    timeout_session = Mock()
+    timeout_session.get.side_effect = requests.exceptions.Timeout(FAKE_API_KEY)
+    timeout_client = RemoteChatCompletionsClient.from_base_url(
+        api_key=FAKE_API_KEY,
+        api_url="https://invalid.example.test/base",
+        retry_settings=RetrySettings(max_retries=0),
+        session=timeout_session,
+    )
+
+    with pytest.raises(RequestTimeoutError) as timeout_error:
+        timeout_client.list_model_ids()
+    assert FAKE_API_KEY not in str(timeout_error.value)
+    timeout_session.get.assert_called_once()
+
+
+def test_api_key_newline_is_rejected_and_surrounding_whitespace_is_normalized():
+    with pytest.raises(InvalidConfigurationError, match="invalid characters"):
+        RemoteChatCompletionsClient(
+            api_key=FAKE_API_KEY + "\n",
+            api_url=FAKE_API_URL,
+            session=Mock(),
+        )
 
 
 def test_rate_limit_is_retried_and_respects_retry_after():

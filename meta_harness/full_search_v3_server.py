@@ -60,12 +60,32 @@ from meta_harness.full_search_v3_proposer import (
     FullSearchV3Proposer,
     FullSearchV3ProposerConfig,
 )
-from meta_harness.full_search_v3_retry import SolverRetryPolicy
+from meta_harness.full_search_v3_retry import (
+    SolverRetryPolicy,
+    execute_solver_request_with_retry,
+)
 from meta_harness.full_search_v3_solver import create_live_solver_client
 from meta_harness.full_search_v3_solver import (
+    FULL_SEARCH_V3_MODEL_LIST_PREFLIGHT_VERSION,
+    FULL_SEARCH_V3_TRANSPORT_CONTRACT_VERSION,
     build_solver_request,
-    execute_solver_request,
+    preflight_live_solver_model_list,
     solver_request_payload_sha256,
+)
+from model_inference.remote_client import (
+    AuthenticationError,
+    DEFAULT_CHAT_COMPLETIONS_PATH,
+    DEFAULT_MODELS_PATH,
+    InvalidConfigurationError,
+    InvalidRequestError,
+    MalformedJSONError,
+    NetworkError,
+    PermissionDeniedError,
+    RateLimitError,
+    RequestTimeoutError,
+    ServerError,
+    UnexpectedResponseSchemaError,
+    build_compatible_api_endpoints,
 )
 from meta_harness.prompt_family import canonical_json
 from utils.answer_parser import PARSER_VERSION, parse_answer
@@ -73,8 +93,13 @@ from utils.constant import COT_PROMPT
 
 
 _COMMIT = re.compile(r"^[0-9a-f]{40,64}$")
+_PINNED_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_SMOKE_RECEIPT_SCHEMA_VERSION = "sciver_full_search_v3_smoke_receipt_v1"
+_SMOKE_RECEIPT_SCHEMA_VERSION = "sciver_full_search_v3_smoke_receipt_v2"
+_REQUEST_BUILDER_VERSION = "sciver_full_search_v3_sciver_request_builder_v1"
+EXPECTED_REPOSITORY_ORIGIN = (
+    "https://github.com/TruongDat05/sciver-meta-harness.git"
+)
 
 
 class FullSearchV3ServerError(RuntimeError):
@@ -90,6 +115,65 @@ class _PreflightProposer:
 
     def propose(self, **_kwargs: Any) -> None:
         raise AssertionError("SEARCH preflight must not invoke the proposer")
+
+
+def validate_full_search_v3_server_checkout(
+    *,
+    repository_root: str | Path,
+    pinned_commit_sha: str,
+    expected_origin_url: str = EXPECTED_REPOSITORY_ORIGIN,
+) -> dict[str, Any]:
+    """Fail closed on the wrong repository, revision, or dirty checkout."""
+
+    root = Path(repository_root).resolve()
+    if not root.is_dir() or not (root / ".git").exists():
+        raise FullSearchV3ServerError("repository root is not a Git checkout")
+    if (
+        not isinstance(pinned_commit_sha, str)
+        or not _PINNED_COMMIT.fullmatch(pinned_commit_sha)
+        or len(set(pinned_commit_sha)) == 1
+    ):
+        raise FullSearchV3ServerError(
+            "PINNED_COMMIT_SHA must be a non-placeholder 40-character lowercase Git SHA"
+        )
+    if expected_origin_url != EXPECTED_REPOSITORY_ORIGIN:
+        raise FullSearchV3ServerError("expected repository origin is not canonical")
+
+    top_level = _git_output(root, "rev-parse", "--show-toplevel")
+    try:
+        resolved_top_level = Path(top_level).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise FullSearchV3ServerError("repository top level is invalid") from exc
+    if resolved_top_level != root:
+        raise FullSearchV3ServerError("repository root does not match the Git top level")
+    origin = _git_output(root, "remote", "get-url", "origin")
+    if origin != expected_origin_url:
+        raise FullSearchV3ServerError("repository origin does not match the expected URL")
+    head = _git_output(root, "rev-parse", "HEAD")
+    if head != pinned_commit_sha:
+        raise FullSearchV3ServerError("checked-out commit does not match PINNED_COMMIT_SHA")
+    status = _git_output(
+        root, "status", "--porcelain=v1", "--untracked-files=all", allow_empty=True
+    )
+    if status:
+        raise FullSearchV3ServerError(
+            "repository worktree is not clean, including untracked non-ignored files"
+        )
+    required_files = (
+        root / "requirements.txt",
+        root / "notebooks" / "sciver_full_search_v3_server.ipynb",
+        root / "meta_harness" / "full_search_v3_server.py",
+    )
+    if any(not path.is_file() for path in required_files):
+        raise FullSearchV3ServerError("repository deployment metadata is incomplete")
+    return {
+        "operation": "checkout_validation",
+        "status": "passed",
+        "origin": origin,
+        "source_commit": head,
+        "worktree_clean": True,
+        "dependency_metadata": "requirements.txt",
+    }
 
 
 def prepare_full_search_v3_server_run(
@@ -147,11 +231,8 @@ def preflight_full_search_v3_server_run(
 
     state_path = full_search_v3_orchestration_state_path(repository_root, safe_run_id)
     resume = state_path.exists()
-    if resume:
-        if solver_identity_sha256 is None:
-            raise FullSearchV3ServerError(
-                "existing SEARCH run requires solver_identity_sha256 for resume validation"
-            )
+    resume_identity_checked = False
+    if resume and solver_identity_sha256 is not None:
         # M4 remains the authority for immutable identity compatibility.  This
         # call reads an existing state only; the path-exists guard prevents a
         # dry run from creating state.
@@ -165,6 +246,7 @@ def preflight_full_search_v3_server_run(
             proposer=_PreflightProposer(),
             proposer_identity=proposer_identity,
         ).state()
+        resume_identity_checked = True
 
     return _search_preflight_status(
         repository_root=repository_root,
@@ -174,6 +256,7 @@ def preflight_full_search_v3_server_run(
         solver_identity_sha256=solver_identity_sha256,
         proposer_identity=proposer_identity,
         resume=resume,
+        resume_identity_checked=resume_identity_checked,
     )
 
 
@@ -289,8 +372,14 @@ def run_full_search_v3_server_smoke(
             receipt = _load_compatible_smoke_receipt(receipt_path, identity)
             return _smoke_status(receipt, receipt_path, reused=True)
 
-        result = execute_solver_request(
-            _construct_live_solver(runtime_url, runtime_key), request
+        client = _construct_live_solver(runtime_url, runtime_key)
+        model_list_preflight = _run_model_list_preflight(client)
+        result = execute_solver_request_with_retry(
+            client,
+            request,
+            policy=SolverRetryPolicy(),
+            sleeper=time.sleep,
+            clock=time.monotonic,
         )
         parsed = parse_answer(result.content)
         if parsed["parse_status"] != "parsed":
@@ -304,6 +393,7 @@ def run_full_search_v3_server_smoke(
             "identity_sha256": _sha256_json(identity),
             "logical_calls": 1,
             "parse_status": "parsed",
+            "model_list_preflight": model_list_preflight,
         }
         _create_once_json(receipt_path, receipt)
         persisted = _load_compatible_smoke_receipt(receipt_path, identity)
@@ -316,6 +406,20 @@ def full_search_v3_server_smoke_receipt_path(
     """Return the isolated create-once SMOKE receipt path."""
 
     return _run_directory(repository_root, run_id) / "smoke" / "completion.json"
+
+
+def inspect_full_search_v3_server_smoke_receipt(
+    *, repository_root: str | Path, run_id: str
+) -> dict[str, Any]:
+    """Validate a receipt's safe self-identity without reading credentials."""
+
+    path = full_search_v3_server_smoke_receipt_path(repository_root, run_id)
+    receipt = _read_smoke_receipt(path)
+    identity = receipt.get("identity")
+    if not isinstance(identity, Mapping):
+        raise FullSearchV3ServerError("SMOKE receipt identity is invalid")
+    validated = _load_compatible_smoke_receipt(path, identity)
+    return _smoke_status(validated, path, reused=True)
 
 
 def inspect_full_search_v3_server_status(
@@ -356,10 +460,17 @@ def preflight_full_search_v3_server_final(
     dataset_path: str | Path,
     private_manifest_path: str | Path,
     search_safe_manifest_path: str | Path,
-    solver_identity_sha256: str,
+    solver_identity_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Delegate M5 FINAL planning without a client, dispatch, or state mutation."""
 
+    if solver_identity_sha256 is None:
+        state_path = full_search_v3_orchestration_state_path(repository_root, run_id)
+        state = load_full_search_v3_orchestration_state(state_path)
+        identity = state.get("identity")
+        if not isinstance(identity, Mapping):
+            raise FullSearchV3ServerError("SEARCH run identity is missing")
+        solver_identity_sha256 = identity.get("solver_identity_sha256")
     _require_sha256(solver_identity_sha256, "solver_identity_sha256")
     final_records = _trusted_final_records(dataset_path, private_manifest_path)
     return preflight_full_search_v3_final(
@@ -469,17 +580,34 @@ def inspect_full_search_v3_server_activity(
     }
 
 
-def solver_identity_from_api_url(api_url: str) -> str:
+def solver_identity_from_api_url(
+    api_url: str,
+    *,
+    models_path: str = DEFAULT_MODELS_PATH,
+    chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH,
+) -> str:
     """Return a non-reversible solver deployment identity for runtime use only."""
 
-    if not isinstance(api_url, str) or not api_url.strip():
-        raise FullSearchV3ServerError("runtime API_URL is required for live execution")
+    try:
+        endpoints = build_compatible_api_endpoints(
+            api_url,
+            models_path=models_path,
+            chat_completions_path=chat_completions_path,
+        )
+    except InvalidConfigurationError as exc:
+        raise FullSearchV3ServerError("runtime API_URL is not a safe base URL") from exc
     config = canonical_full_search_v3_config()
     return _sha256_json(
         {
             "protocol_id": config.protocol_id,
             "solver_model": config.solver_model,
-            "api_url_sha256": hashlib.sha256(api_url.encode("utf-8")).hexdigest(),
+            "api_base_sha256": hashlib.sha256(
+                endpoints.base_url.encode("utf-8")
+            ).hexdigest(),
+            "transport": _transport_contract_identity(
+                models_path=endpoints.models_path,
+                chat_completions_path=endpoints.chat_completions_path,
+            ),
         }
     )
 
@@ -507,9 +635,22 @@ def _search_preflight_status(
     solver_identity_sha256: str | None,
     proposer_identity: Mapping[str, Any],
     resume: bool,
+    resume_identity_checked: bool,
 ) -> dict[str, Any]:
     config = canonical_full_search_v3_config()
     manifest = search_input.manifest
+    if not search_input.records:
+        raise FullSearchV3ServerError(
+            "offline SMOKE requires at least one validated SEARCH record"
+        )
+    offline_request = build_solver_request(search_input.records[0], COT_PROMPT)
+    request_builder_identity_sha256 = _sha256_json(
+        {
+            "version": _REQUEST_BUILDER_VERSION,
+            "canonical_p0_prompt_sha256": canonical_full_search_v3_p0_prompt_sha256(),
+            "parser_version": PARSER_VERSION,
+        }
+    )
     return {
         "operation": "search_preflight",
         "protocol_id": config.protocol_id,
@@ -536,6 +677,7 @@ def _search_preflight_status(
             ),
         },
         "resume": resume,
+        "resume_identity_checked": resume_identity_checked,
         "source_commit": source_commit,
         "config_sha256": config.sha256(),
         "split_sha256": manifest["split_sha256"],
@@ -553,8 +695,16 @@ def _search_preflight_status(
                 "max_tokens": config.solver_max_tokens,
             },
             "identity_sha256": solver_identity_sha256,
+            "transport": _transport_contract_identity(),
         },
         "parser_version": PARSER_VERSION,
+        "offline_smoke": {
+            "status": "passed",
+            "request_builder_version": _REQUEST_BUILDER_VERSION,
+            "request_builder_identity_sha256": request_builder_identity_sha256,
+            "request_payload_sha256": solver_request_payload_sha256(offline_request),
+            "logical_calls": 0,
+        },
         "proposer_identity_sha256": _sha256_json(proposer_identity),
         "workload": {
             "minimum_search_logical_calls": 16000,
@@ -600,6 +750,12 @@ def _smoke_identity_and_request(
         "canonical_p0_prompt_sha256": preflight["canonical_p0_prompt_sha256"],
         "solver": preflight["solver"],
         "parser_version": preflight["parser_version"],
+        "request_builder_version": preflight["offline_smoke"][
+            "request_builder_version"
+        ],
+        "request_builder_identity_sha256": preflight["offline_smoke"][
+            "request_builder_identity_sha256"
+        ],
         "request_payload_sha256": solver_request_payload_sha256(request),
     }
     return identity, request
@@ -624,13 +780,9 @@ def _require_compatible_smoke_receipt(
 def _load_compatible_smoke_receipt(
     path: Path, expected_identity: Mapping[str, Any]
 ) -> dict[str, Any]:
-    try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise FullSearchV3ServerError(
-            "SMOKE receipt is unreadable; use a fresh run ID after inspecting the artifact"
-        ) from exc
+    receipt = _read_smoke_receipt(path)
     expected_hash = _sha256_json(expected_identity)
+    model_list_preflight = receipt.get("model_list_preflight")
     if (
         not isinstance(receipt, dict)
         or receipt.get("schema_version") != _SMOKE_RECEIPT_SCHEMA_VERSION
@@ -639,6 +791,7 @@ def _load_compatible_smoke_receipt(
         or receipt.get("parse_status") != "parsed"
         or receipt.get("identity") != dict(expected_identity)
         or receipt.get("identity_sha256") != expected_hash
+        or not _valid_model_list_preflight(model_list_preflight)
     ):
         raise FullSearchV3ServerError(
             "SMOKE receipt is incompatible with this run, split, prompt, parser, solver, or source revision"
@@ -657,6 +810,7 @@ def _smoke_status(
         "identity_sha256": receipt["identity_sha256"],
         "receipt_path": str(path),
         "reused": reused,
+        "model_list_preflight": dict(receipt["model_list_preflight"]),
     }
 
 
@@ -745,7 +899,10 @@ def _trusted_final_records(
 def _construct_live_solver(api_url: str, api_key: str) -> Any:
     with _runtime_environment(api_url=api_url, api_key=api_key):
         try:
-            return create_live_solver_client(allow_live_requests=True)
+            return create_live_solver_client(
+                allow_live_requests=True,
+                api_url_is_base=True,
+            )
         except Exception as exc:
             raise FullSearchV3ServerError(
                 "unable to construct the live solver; verify runtime API_URL and API_KEY"
@@ -759,7 +916,93 @@ def _runtime_credentials(*, api_url: str | None, api_key: str | None) -> tuple[s
         raise FullSearchV3ServerError("live execution requires runtime API_URL")
     if not isinstance(runtime_key, str) or not runtime_key.strip():
         raise FullSearchV3ServerError("live execution requires runtime API_KEY")
-    return runtime_url, runtime_key
+    if "\r" in runtime_key or "\n" in runtime_key:
+        raise FullSearchV3ServerError("runtime API_KEY contains invalid characters")
+    try:
+        endpoints = build_compatible_api_endpoints(runtime_url)
+    except InvalidConfigurationError as exc:
+        raise FullSearchV3ServerError("runtime API_URL is not a safe base URL") from exc
+    return endpoints.base_url, runtime_key.strip()
+
+
+def _transport_contract_identity(
+    *,
+    models_path: str = DEFAULT_MODELS_PATH,
+    chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH,
+) -> dict[str, str]:
+    return {
+        "version": FULL_SEARCH_V3_TRANSPORT_CONTRACT_VERSION,
+        "models_path_sha256": hashlib.sha256(models_path.encode("utf-8")).hexdigest(),
+        "chat_completions_path_sha256": hashlib.sha256(
+            chat_completions_path.encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def _run_model_list_preflight(client: Any) -> dict[str, Any]:
+    try:
+        return preflight_live_solver_model_list(client)
+    except AuthenticationError:
+        category = "authentication"
+    except PermissionDeniedError:
+        category = "permission"
+    except InvalidRequestError:
+        category = "invalid_request"
+    except RateLimitError:
+        category = "rate_limit"
+    except RequestTimeoutError:
+        category = "timeout"
+    except NetworkError:
+        category = "connection_failure"
+    except ServerError:
+        category = "server_error"
+    except MalformedJSONError:
+        category = "malformed_json"
+    except UnexpectedResponseSchemaError:
+        category = "incompatible_response_schema"
+    except Exception as exc:
+        if "immutable V3 solver model" in str(exc):
+            category = "missing_locked_model"
+        else:
+            category = "incompatible_response_schema"
+    raise FullSearchV3ServerError(
+        f"model-list preflight failed: {category}"
+    ) from None
+
+
+def _read_smoke_receipt(path: Path) -> dict[str, Any]:
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FullSearchV3ServerError(
+            "SMOKE receipt is unreadable; use a fresh run ID after inspecting the artifact"
+        ) from exc
+    if not isinstance(receipt, dict):
+        raise FullSearchV3ServerError("SMOKE receipt must be a JSON object")
+    return receipt
+
+
+def _valid_model_list_preflight(value: Any) -> bool:
+    config = canonical_full_search_v3_config()
+    return (
+        isinstance(value, Mapping)
+        and set(value)
+        == {
+            "schema_version",
+            "status",
+            "model_count",
+            "model_ids_sha256",
+            "locked_model_sha256",
+        }
+        and value.get("schema_version") == FULL_SEARCH_V3_MODEL_LIST_PREFLIGHT_VERSION
+        and value.get("status") == "passed"
+        and isinstance(value.get("model_count"), int)
+        and not isinstance(value.get("model_count"), bool)
+        and value["model_count"] > 0
+        and bool(_SHA256.fullmatch(str(value.get("model_ids_sha256", ""))))
+        and value.get("locked_model_sha256")
+        == hashlib.sha256(config.solver_model.encode("utf-8")).hexdigest()
+    )
 
 
 def _lock_activity(path: Path) -> str:
@@ -839,6 +1082,27 @@ def _require_proposer_cli() -> None:
         )
 
 
+def _git_output(
+    repository_root: Path,
+    *arguments: str,
+    allow_empty: bool = False,
+) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise FullSearchV3ServerError("repository identity validation failed") from exc
+    value = completed.stdout.strip()
+    if not value and not allow_empty:
+        raise FullSearchV3ServerError("repository identity validation returned no value")
+    return value
+
+
 def _source_commit(repository_root: str | Path, supplied: str | None) -> str:
     if supplied is not None:
         if not isinstance(supplied, str) or not _COMMIT.fullmatch(supplied):
@@ -887,12 +1151,14 @@ def _sha256_json(value: Any) -> str:
 
 
 __all__ = [
+    "EXPECTED_REPOSITORY_ORIGIN",
     "FullSearchV3ServerAuthorizationError",
     "FullSearchV3ServerError",
     "freeze_full_search_v3_server_winner",
     "full_search_v3_server_smoke_receipt_path",
     "inspect_full_search_v3_server_activity",
     "inspect_full_search_v3_server_final_status",
+    "inspect_full_search_v3_server_smoke_receipt",
     "inspect_full_search_v3_server_status",
     "preflight_full_search_v3_server_final",
     "preflight_full_search_v3_server_run",
@@ -901,4 +1167,5 @@ __all__ = [
     "solver_identity_from_api_url",
     "start_or_resume_full_search_v3_server_final",
     "start_or_resume_full_search_v3_server_run",
+    "validate_full_search_v3_server_checkout",
 ]

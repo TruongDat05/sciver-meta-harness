@@ -1,108 +1,147 @@
 # SciVer Full-Search v3 server operations
 
-Use the canonical [server notebook](../notebooks/sciver_full_search_v3_server.ipynb) for normal operation. It calls the M6 interface and owns no split, request, evaluation, ranking, freeze, or FINAL logic. The optional `scripts/run_full_search_v3_server.py` command uses those same M6 APIs and the same durable run state when a terminal/background workflow is needed.
+The canonical [server notebook](../notebooks/sciver_full_search_v3_server.ipynb)
+is the normal operator interface. It delegates every scientific operation to
+`meta_harness.full_search_v3_server`; the optional terminal wrapper calls the
+same APIs and durable state.
 
-## Prepare a server session
-
-Create an isolated Python environment, clone the repository, and work from a pinned commit. For example, use either of these environment choices:
+## Prepare the server before JupyterLab
 
 ```bash
-conda create -n sciver-v3 python=3.11
-conda activate sciver-v3
-python -m pip install -r requirements.txt
+git clone https://github.com/TruongDat05/sciver-meta-harness.git
+cd sciver-meta-harness
+git rev-parse HEAD
+git remote get-url origin
+git status --short --untracked-files=all
 ```
+
+Record the exact 40-character lowercase commit SHA. Create an environment and
+install dependencies before launching JupyterLab:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-```
-
-Start JupyterLab inside a persistent tmux session:
-
-```bash
 tmux new -s sciver-v3-jupyter
 jupyter lab --no-browser --ip=127.0.0.1 --port=8888
 ```
 
-From a new SSH connection, reconnect with a local tunnel and then attach to the session if needed:
+Open `notebooks/sciver_full_search_v3_server.ipynb` from this checkout. The
+notebook verifies the exact canonical origin URL, pinned HEAD, clean worktree
+including untracked non-ignored files, `requirements.txt`, required imports,
+and dataset path. It never changes the checkout or installs packages. Put the
+private dataset outside version control and supply its absolute path at runtime.
 
-```bash
-ssh -L 8888:127.0.0.1:8888 <server>
-tmux attach -t sciver-v3-jupyter
+## Offline and live gates
+
+Run SETUP, preparation, and OFFLINE_SMOKE first. OFFLINE_SMOKE constructs and
+hashes one canonical P0 SEARCH-safe request through the production request
+builder and validates immutable configuration, split, parser, workload, and
+resume metadata. It reads no credential, constructs no live client, invokes no
+proposer, and writes no production SEARCH state.
+
+At the notebook layer the exact independent confirmations are:
+
+- LIVE_SMOKE: `RUN_LIVE_SMOKE`
+- FULL_SEARCH: `RUN_FULL_SEARCH`
+- FINAL: `RUN_FINAL_ONCE`
+
+An empty value skips the stage. Any other non-empty value fails before reading
+credentials or constructing a client. The notebook reads only runtime
+`API_URL` and hidden `API_KEY`, trims surrounding whitespace, rejects an empty
+value or key containing a newline, and never displays either value.
+
+For v3, `API_URL` is the exact base URL. The transport uses precisely:
+
+```text
+GET  {API_URL}/models
+POST {API_URL}/chat/completions
 ```
 
-Open `notebooks/sciver_full_search_v3_server.ipynb`, set its non-secret paths, repository URL, exact commit SHA, run ID, and dataset path, then run cells in order. Do not use a moving branch name in place of the pinned SHA.
+It strips redundant join slashes, never inserts `/v1`, and rejects embedded
+credentials, query strings, and fragments. LIVE_SMOKE first requires the
+locked `Qwen/Qwen3.5-35B-A3B` model in the sanitized model list, then sends
+exactly one canonical P0 SEARCH-safe logical request and requires canonical
+parsing. The receipt stores only source/config/split/request/parser/deployment/
+transport identities, safe model-list hashes/counts, one logical call, and
+parse status.
 
-## Runtime API values and dry-run
+## Terminal operation
 
-Enter `API_URL` and `API_KEY` only after opening the notebook. The notebook reads environment values when already present or prompts at runtime; the key uses `getpass`. Do not put either value in a notebook cell, shell script, command argument, run directory, or log.
-
-Run the preparation and SEARCH preflight cells before authorizing live work. They validate exact split counts, paper disjointness, hashes, model/generation/parser identity, workload budgets, checkpoint locations, and compatible resume state. Preflight constructs neither a live solver nor a proposer client.
-
-Keep `RUN_SMOKE = False`, `RUN_FULL_SEARCH = False`, and `RUN_FINAL = False` until each stage is separately authorized. SMOKE makes exactly one canonical P0 request from SEARCH, persists only a create-once compatible receipt under the run's isolated `smoke` directory, and never opens FINAL or production SEARCH state.
-
-## SEARCH operation and monitoring
-
-After explicit SMOKE authorization, set `RUN_SMOKE = True` and create or verify the receipt. Then obtain separate production authorization, set `RUN_FULL_SEARCH = True`, and rerun the guarded FULL_SEARCH cell. SEARCH fails closed if its SMOKE receipt is missing or incompatible. The same repository/workspace/run ID resumes only compatible durable SEARCH state. Inspect progress through the notebook's SEARCH status cell; it displays only aggregate state, metrics, hashes, and artifact locations.
-
-For terminal operation, use the thin command wrapper. It never accepts credentials as arguments; any live request uses only inherited process `API_URL` and `API_KEY` values:
+Credentials are never accepted as command arguments. Live commands read only
+the process `API_URL` and `API_KEY` values.
 
 ```bash
+python scripts/run_full_search_v3_server.py prepare \
+  --repository-root . --run-id <run-id> \
+  --dataset-path <dataset>
+
 python scripts/run_full_search_v3_server.py search-preflight \
-  --repository-root <repository> --run-id <run-id> \
+  --repository-root . --run-id <run-id> \
   --search-safe-manifest <search-safe-manifest> \
   --search-records <search-records> --source-commit <pinned-sha>
 
 python scripts/run_full_search_v3_server.py smoke \
-  --repository-root <repository> --run-id <run-id> \
+  --repository-root . --run-id <run-id> \
   --search-safe-manifest <search-safe-manifest> \
   --search-records <search-records> --source-commit <pinned-sha> \
   --live-smoke
 
 python scripts/run_full_search_v3_server.py search \
-  --repository-root <repository> --run-id <run-id> \
+  --repository-root . --run-id <run-id> \
   --search-safe-manifest <search-safe-manifest> \
   --search-records <search-records> --source-commit <pinned-sha> \
   --live-search
 ```
 
-Without `--live-smoke` or `--live-search`, the corresponding command fails closed before reading credentials or dispatching. Neither flag authorizes the other. JSON output is sanitized and may be redirected to a run-local operator log; do not redirect shell environment dumps or notebook output. Check a process lock before starting another runner:
+Without the matching live flag, a command fails before credential access or
+dispatch. Smoke and SEARCH authorizations do not authorize one another.
+
+Monitor only sanitized status and process locks:
 
 ```bash
 python scripts/run_full_search_v3_server.py activity \
-  --repository-root <repository> --run-id <run-id>
+  --repository-root . --run-id <run-id>
 python scripts/run_full_search_v3_server.py search-status \
-  --repository-root <repository> --run-id <run-id>
-ps -ef | grep '[r]un_full_search_v3_server.py'
+  --repository-root . --run-id <run-id>
+df -h <workspace>
+du -sh workspace/meta_harness/full_search_v3/<run-id>
 ```
 
-`activity` is advisory; the M4 lock is the authoritative race-safe gate. If it reports `held`, do not start a second SEARCH or FINAL process. If a process has exited, rerun the same guarded notebook or command with the same durable identity. Completed SEARCH cache entries and FINAL request hashes are reused; incompatible identity is rejected rather than resumed.
-
-Monitor only sanitized command/notebook status and local storage:
+After SEARCH reports `patience_stopped` or `max_stopped`, freeze the immutable
+winner and run the offline FINAL preflight:
 
 ```bash
-df -h <workspace>
-du -sh <workspace>/meta_harness/full_search_v3/<run-id>
+python scripts/run_full_search_v3_server.py freeze \
+  --repository-root . --run-id <run-id>
+python scripts/run_full_search_v3_server.py final-preflight \
+  --repository-root . --run-id <run-id> \
+  --dataset-path <dataset> --private-manifest <private-manifest> \
+  --search-safe-manifest <search-safe-manifest> \
+  --solver-identity-sha256 <safe-deployment-identity>
 ```
 
-## Freeze and FINAL
-
-Freeze only after SEARCH reports `patience_stopped` or `max_stopped`. The M6 freeze call is create-once and validates terminal ranking before writing `meta_cot`. FINAL remains locked until that artifact exists.
-
-Run FINAL preflight first. It exposes only safe identities and prompt hashes; it does not display private examples, IDs, labels, requests, or images. Then obtain separate explicit authorization and set `RUN_FINAL = True`, or use:
+After separate FINAL authorization:
 
 ```bash
 python scripts/run_full_search_v3_server.py final \
-  --repository-root <repository> --run-id <run-id> \
+  --repository-root . --run-id <run-id> \
   --dataset-path <dataset> --private-manifest <private-manifest> \
   --search-safe-manifest <search-safe-manifest> --live-final
 ```
 
-`--live-final` is separate from `--live-search`; neither authorizes the other. FINAL status and completion receipts are sanitized and paired, and FINAL results cannot alter SEARCH state or the frozen winner.
+## Safe interruption and resume
 
-## Interruptions and safe stopping
+Send one `Ctrl-C` and wait. Do not delete locks, caches, checkpoints, smoke
+receipts, frozen artifacts, or FINAL state, and do not start a competing
+runner. Reopen the same pinned clean checkout, restore the same runtime values,
+rerun checkout/preflight validation, inspect `activity`, and invoke the same
+stage with the same run ID. Completed compatible SEARCH cache entries and FINAL
+request hashes are reused. Any source, split, model, generation, parser,
+proposer, deployment, transport-version, or path-identity change fails closed.
 
-For a notebook kernel, SSH, or server interruption, do not delete or edit run artifacts. Restart the kernel/session, restore the same pinned checkout, workspace, run ID, and runtime environment, then rerun preparation and preflight before the appropriate guarded stage. Resume reuses the durable M4/M5 checkpoints and never intentionally redispatches completed work.
-
-To stop an active foreground operation, send one interrupt (`Ctrl-C`) and wait for it to return. For a tmux operation, attach and interrupt there. Do not start a competing process, delete locks, use `kill -9`, or remove cache/checkpoint files. After it exits, inspect `activity`, status, and disk space, then resume with the same identity.
+Artifacts are stored under
+`workspace/meta_harness/full_search_v3/<run-id>/`. Status and receipts are
+sanitized; they must never contain the runtime endpoint, credential,
+Authorization header, request/response body, images, sample identifiers,
+labels, predictions, or FINAL material.

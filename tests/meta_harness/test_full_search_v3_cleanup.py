@@ -97,3 +97,38 @@ def test_supported_documentation_has_no_removed_commands():
 def test_canonical_server_notebook_is_the_only_tracked_notebook():
     notebooks = sorted(path.name for path in (REPOSITORY_ROOT / "notebooks").glob("*.ipynb"))
     assert notebooks == ["sciver_full_search_v3_server.ipynb"]
+
+
+def test_authorized_obsolete_deployment_files_are_absent_and_unreferenced():
+    env_example = ".env" + ".example"
+    image_name = "image-" + "20250603111710602.png"
+    removed = (
+        REPOSITORY_ROOT / env_example,
+        REPOSITORY_ROOT / "README.assets" / image_name,
+    )
+    assert all(not path.exists() for path in removed)
+
+    reference_files = [
+        REPOSITORY_ROOT / "README.md",
+        *sorted((REPOSITORY_ROOT / "docs").glob("*.md")),
+        *sorted((REPOSITORY_ROOT / "notebooks").glob("*.ipynb")),
+        *sorted((REPOSITORY_ROOT / "tests").glob("**/*.py")),
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in reference_files)
+    assert env_example not in source
+    assert image_name not in source
+
+
+def test_readme_commands_and_referenced_repository_paths_exist():
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "git clone https://github.com/TruongDat05/sciver-meta-harness.git" in readme
+    assert "cd sciver-meta-harness" in readme
+    for relative_path in (
+        "requirements.txt",
+        "notebooks/sciver_full_search_v3_server.ipynb",
+        "scripts/run_full_search_v3_server.py",
+        "docs/sciver_full_search_v3_server_operations.md",
+        "docs/remote-benchmark.md",
+    ):
+        assert relative_path in readme
+        assert (REPOSITORY_ROOT / relative_path).exists()

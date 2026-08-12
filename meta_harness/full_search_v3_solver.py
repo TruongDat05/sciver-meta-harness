@@ -14,12 +14,22 @@ from meta_harness.config import (
     FullSearchV3Config,
     canonical_full_search_v3_config,
 )
+from model_inference.remote_client import (
+    DEFAULT_CHAT_COMPLETIONS_PATH,
+    DEFAULT_MODELS_PATH,
+)
 from model_inference.remote_api import prepare_remote_requests
 from utils.answer_parser import PARSER_VERSION
 
 
 SOLVER_REQUEST_IDENTITY_SCHEMA_VERSION = (
     "sciver_full_search_v3_solver_request_identity_v1"
+)
+FULL_SEARCH_V3_TRANSPORT_CONTRACT_VERSION = (
+    "sciver_full_search_v3_compatible_transport_v1"
+)
+FULL_SEARCH_V3_MODEL_LIST_PREFLIGHT_VERSION = (
+    "sciver_full_search_v3_model_list_preflight_v1"
 )
 
 
@@ -296,10 +306,16 @@ class _CompatibleHTTPSolverClient:
         usage = _safe_usage(getattr(self._client, "last_usage", None))
         return SolverResult(content=content, usage=usage)
 
+    def list_model_ids(self) -> tuple[str, ...]:
+        """Delegate model discovery without exposing the response object."""
+
+        return self._client.list_model_ids()
+
 
 def create_live_solver_client(
     *,
     allow_live_requests: bool = False,
+    api_url_is_base: bool = False,
 ) -> SolverClient:
     """Construct the compatible HTTP client only after explicit live opt-in."""
 
@@ -316,14 +332,66 @@ def create_live_solver_client(
     from model_inference.remote_config import validate_config_for_live_request
 
     live_config = validate_config_for_live_request()
-    client = RemoteChatCompletionsClient(
-        api_key=live_config.api_key,
-        api_url=live_config.api_url,
-        timeout=live_config.timeout_seconds,
-        # The V3 solver boundary owns retry accounting and classification.
-        retry_settings=RetrySettings(max_retries=0),
-    )
+    client_arguments = {
+        "api_key": live_config.api_key,
+        "api_url": live_config.api_url,
+        "timeout": live_config.timeout_seconds,
+        # The V3 solver boundary owns POST retry accounting and classification.
+        "retry_settings": RetrySettings(max_retries=0),
+    }
+    if api_url_is_base:
+        client = RemoteChatCompletionsClient.from_base_url(
+            **client_arguments,
+            models_path=DEFAULT_MODELS_PATH,
+            chat_completions_path=DEFAULT_CHAT_COMPLETIONS_PATH,
+        )
+    else:
+        # Existing generic callers continue to supply a complete Chat
+        # Completions URL unless they explicitly opt into base-URL mode.
+        client = RemoteChatCompletionsClient(**client_arguments)
     return _CompatibleHTTPSolverClient(client)
+
+
+def preflight_live_solver_model_list(
+    client: SolverClient,
+    *,
+    required_model: str | None = None,
+) -> dict[str, Any]:
+    """Verify the locked model and return only safe model-list identities."""
+
+    active_config = canonical_full_search_v3_config()
+    locked_model = (
+        active_config.solver_model if required_model is None else required_model
+    )
+    if locked_model != active_config.solver_model:
+        raise FullSearchV3SolverError(
+            "model-list preflight must require the immutable V3 solver model"
+        )
+    list_model_ids = getattr(client, "list_model_ids", None)
+    if not callable(list_model_ids):
+        raise FullSearchV3SolverError(
+            "live solver does not provide model-list preflight"
+        )
+    model_ids = list_model_ids()
+    if not isinstance(model_ids, tuple) or any(
+        not isinstance(item, str) or not item for item in model_ids
+    ):
+        raise FullSearchV3SolverError(
+            "model-list preflight returned an incompatible sanitized result"
+        )
+    if locked_model not in model_ids:
+        raise FullSearchV3SolverError(
+            "model-list preflight did not expose the immutable V3 solver model"
+        )
+    return {
+        "schema_version": FULL_SEARCH_V3_MODEL_LIST_PREFLIGHT_VERSION,
+        "status": "passed",
+        "model_count": len(model_ids),
+        "model_ids_sha256": _canonical_sha256(sorted(model_ids)),
+        "locked_model_sha256": hashlib.sha256(
+            locked_model.encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def _safe_usage(value: Any) -> dict[str, int] | None:
@@ -367,6 +435,8 @@ def _require_sha256(value: Any, field: str) -> None:
 
 
 __all__ = [
+    "FULL_SEARCH_V3_MODEL_LIST_PREFLIGHT_VERSION",
+    "FULL_SEARCH_V3_TRANSPORT_CONTRACT_VERSION",
     "FullSearchV3SolverError",
     "LiveSolverDisabledError",
     "SOLVER_REQUEST_IDENTITY_SCHEMA_VERSION",
@@ -379,5 +449,6 @@ __all__ = [
     "build_solver_request_identity",
     "create_live_solver_client",
     "execute_solver_request",
+    "preflight_live_solver_model_list",
     "solver_request_payload_sha256",
 ]

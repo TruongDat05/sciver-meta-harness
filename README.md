@@ -1,145 +1,185 @@
-# SCIVER: A Benchmark for Multimodal Scientific Claim Verification
+# SciVer Meta-Harness
 
-<p align="center">
-  <a href="https://github.com/QDRhhhh/SciVer">🌐 Github</a> •
-  <a href="https://arxiv.org/abs/2506.15569">📖 Paper</a> •
-  <a href="https://huggingface.co/datasets/chengyewang/SciVer">🤗 Data</a>
-</p>
+This repository extends the SciVer multimodal scientific-claim benchmark with
+provider-neutral remote inference and the locked `sciver_full_search_v3`
+prompt-only experiment engine. Full-Search v3 is the primary server workflow;
+the existing generic benchmark CLI, local inference paths, canonical prompts,
+parsers, and evaluation utilities remain supported.
 
-## 📰 News
-- [May 15, 2025] SciVer has been accepted by ACL 2025 Main!
+Full-Search v3 evaluates canonical P0 and one prompt-family candidate per
+iteration on the same complete 1,000-record SEARCH split, freezes the
+SEARCH-only winner as additive `meta_cot`, and then permits a separately
+authorized paired P0/P* evaluation on the isolated 1,000-record FINAL split.
+The solver is fixed to `Qwen/Qwen3.5-35B-A3B`; the production generation
+settings remain `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming,
+and `max_tokens=8192`.
 
-## 👋 Overview
+## Repository architecture
 
-![image-20250603111710602](./README.assets/image-20250603111710602.png)
+- `meta_harness/full_search_v3*.py` owns configuration, deterministic
+  preparation, the canonical request builder boundary, cache/retry/concurrency,
+  full SEARCH, proposing, ranking/patience, freeze, and paired FINAL.
+- `meta_harness/full_search_v3_server.py` composes those APIs for deployment,
+  performs checkout and offline preflight validation, and owns the isolated
+  model-list plus one-request live smoke boundary.
+- `notebooks/sciver_full_search_v3_server.ipynb` is the only canonical notebook.
+  It is a thin, ordered operator layer and contains no experiment logic.
+- `scripts/run_full_search_v3_server.py` is the optional thin terminal wrapper.
+- `model_inference/`, `utils/`, `evaluation/`, and `main.py` retain the
+  supported generic benchmark and local inference paths.
 
-**SCIVER** is the first benchmark specifically designed to evaluate the ability of foundation models to verify scientific claims across **text**, **charts**, and **tables**. It challenges models to reason over complex, multimodal contexts with **fine-grained entailment labels** and **expert-annotated rationales**.
+## Server installation before JupyterLab
 
-> 📌 “Can Multimodal Foundation Models Reason Over Scientific Claims with Text, Tables, and Charts?”
-
-------
-
-## 🌟 Highlights
-
-- 🧪 **3,000 expert-annotated examples** from **1113 scientific papers**
-- 🧠 Four core **reasoning subsets**:
-  - Direct
-  - Parallel
-  - Sequential
-  - Analytical
-- 📚 Context includes **text paragraphs, multiple tables, and charts**
-- 🔍 Labels: `Entailed`, `Refuted`
-- 📈 Evaluated across **21 leading foundation models**, including o4-mini, GPT-4o, Claude 3.5, Qwen2.5-VL, LLaMA-3.2-Vision, etc.
-- ⚖️ Includes **step-by-step rationale** and **automated accuracy evaluation**
-
-------
-
-## 🧩 Benchmark Structure
-
-Each SCIVER sample includes:
-
-- A **claim** grounded in multimodal scientific context
-- **Contextual inputs**: text, tables (as images), charts (as images)
-- A **gold entailment label** (entailed / refuted)
-- **Supporting evidence** and a **reasoning rationale**
-
-### 🧠 Subsets by Reasoning Type
-
-1. **Direct Reasoning** – extract simple facts
-2. **Parallel Reasoning** – synthesize info from multiple sources
-3. **Sequential Reasoning** – perform step-by-step inference
-4. **Analytical Reasoning** – apply domain expertise and logic
-
-------
-
-## 📊 Model Evaluation
-
-We evaluate 21 models using Chain-of-Thought prompting.
-
-| Model            | Accuracy  |
-| ---------------- | --------- |
-| 🧑‍🔬Human Expert   | **93.8%** |
-| o4-mini (OpenAI) | 77.7%     |
-| GPT-4o           | 70.9%     |
-| Qwen2.5-VL-72B   | 69.4%     |
-| InternVL3-38B    | 62.5%     |
-
-> Text-only versions of models drop 35–53% in accuracy — showing **multimodal context is essential**.
-
-------
-
-## 🛠️ Quickstart
-
-### 🔁 Step 0: Installation
+Prepare the repository and environment manually. The notebook never changes
+the checkout and never installs dependencies.
 
 ```bash
-git clone https://github.com/QDRhhhh/SciVer.git
-cd SciVer
-conda create --name sciver python=3.10
-conda activate sciver
-pip install -r requirements.txt
+git clone https://github.com/TruongDat05/sciver-meta-harness.git
+cd sciver-meta-harness
+git rev-parse HEAD
+git remote get-url origin
+git status --short --untracked-files=all
 ```
 
-### 🔁 Step 1: Download Dataset from huggingface
+Record the exact 40-character lowercase commit SHA. The notebook requires that
+SHA, the exact configured `origin`, and a clean worktree including untracked
+non-ignored files. Ignored runtime artifacts under `workspace/meta_harness/`
+are allowed. A mismatch fails closed without changing branches or files.
+
+Create the environment before starting JupyterLab. Either:
 
 ```bash
-git lfs install
-git clone https://huggingface.co/datasets/chengyewang/SciVer
+conda create -n sciver-v3 python=3.11
+conda activate sciver-v3
+python -m pip install -r requirements.txt
 ```
 
-### 🔁 Step 2: Run Model Inference
+or:
 
 ```bash
-bash scripts/vllm_large.sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-This will generate model responses and save them to:
+Place the private SciVer dataset outside version control and provide its
+absolute path at notebook runtime. Do not copy samples, identifiers, labels,
+responses, or images into documentation, logs, or notebook output.
 
-```
-./outputs/
-```
-
-### ✅ Step 3: Evaluate Model Accuracy
+Start JupyterLab in a persistent session:
 
 ```bash
-python acc_evaluation.py
+tmux new -s sciver-v3-jupyter
+jupyter lab --no-browser --ip=127.0.0.1 --port=8888
 ```
 
-The processed results and accuracy scores will be saved to:
+From the operator machine, establish an SSH tunnel and reconnect if needed:
 
+```bash
+ssh -L 8888:127.0.0.1:8888 <server>
+tmux attach -t sciver-v3-jupyter
 ```
-./processed_outputs/
+
+Open `notebooks/sciver_full_search_v3_server.ipynb`. Supply
+`PINNED_COMMIT_SHA`, `SCIVER_DATASET_PATH`, and `SCIVER_RUN_ID` through the
+process environment or the notebook's runtime prompts. Do not edit and save
+deployment values into the tracked notebook.
+
+## Canonical notebook operation
+
+Run the stages in order:
+
+1. **SETUP** locates the existing repository, verifies the canonical origin,
+   pinned commit, clean worktree, dependency metadata, imports, and dataset
+   path.
+2. **SETUP / preparation** creates or validates the exact deterministic seed-42
+   1,000 SEARCH / 1,000 FINAL paper-disjoint artifacts through repository code.
+3. **OFFLINE_SMOKE** validates the configuration, canonical P0 request and
+   payload hash, parser identity, workload, paths, and compatible run state. It
+   reads no credentials, creates no live client, invokes no proposer, and makes
+   no HTTP request.
+4. **LIVE_SMOKE** remains disabled unless the operator types exactly
+   `RUN_LIVE_SMOKE`. Only then does the notebook read runtime `API_URL` and
+   hidden `API_KEY`, perform `GET {API_URL}/models`, require the locked model,
+   and perform exactly one canonical P0 SEARCH-safe
+   `POST {API_URL}/chat/completions`.
+5. **Smoke receipt validation** checks the sanitized create-once receipt. It
+   contains only compatibility identities, safe hashes/counts, one logical
+   call, and parse status.
+6. **FULL_SEARCH** remains disabled unless the operator separately types
+   `RUN_FULL_SEARCH`. It starts or resumes only compatible durable work.
+7. **SEARCH status** may be rerun during operation. After terminal
+   `patience_stopped` or `max_stopped`, **freeze** creates or verifies the
+   immutable SEARCH-only winner.
+8. **FINAL preflight** validates the frozen cross-stage identity offline.
+9. **FINAL** remains disabled unless the operator separately types exactly
+   `RUN_FINAL_ONCE`; it runs or resumes only the paired P0/P* FINAL work.
+10. **Sanitized reporting** displays aggregate status and artifact paths only.
+
+`API_URL` is the exact runtime base URL. The v3 transport trims surrounding
+whitespace and redundant trailing slashes, then joins the separately identified
+paths `/models` and `/chat/completions`; it never inserts `/v1`. URLs with
+embedded credentials, query strings, or fragments are rejected. `API_KEY` is
+trimmed at runtime, must be non-empty, and must contain no newline. Neither
+value is stored in a notebook, command argument, run artifact, receipt, or log.
+
+The existing generic remote client remains backward compatible: callers that
+already pass a complete Chat Completions URL continue to use it as-is. Base-URL
+joining is an additive v3 deployment mode.
+
+## Monitoring, interruption, and resume
+
+Use notebook status cells or the thin wrapper; do not start competing runners:
+
+```bash
+python scripts/run_full_search_v3_server.py activity \
+  --repository-root . --run-id <run-id>
+python scripts/run_full_search_v3_server.py search-status \
+  --repository-root . --run-id <run-id>
+python scripts/run_full_search_v3_server.py final-status \
+  --repository-root . --run-id <run-id>
 ```
 
-### Remote OpenAI-compatible API benchmarks
+For a safe interruption, send one `Ctrl-C`, wait for the process to return,
+inspect activity/status, and rerun the same stage with the same repository,
+commit, run ID, split, deployment identity, and runtime configuration. Do not
+delete locks, caches, checkpoints, receipts, or immutable artifacts. Compatible
+completed SEARCH cache entries and FINAL request hashes are reused;
+incompatible transport, solver, generation, parser, prompt, split, proposer, or
+source identities fail closed.
 
-SciVer also provides an additive, provider-neutral remote benchmark path. It
-supports the following model identifiers and datasets:
+Run-local artifacts are under:
 
+```text
+workspace/meta_harness/full_search_v3/<run-id>/
+├── preparation/
+├── smoke/completion.json
+├── search_cache/
+├── orchestration_state.json
+├── freeze/frozen_winner.json
+└── final/
+```
+
+See [the server operations guide](docs/sciver_full_search_v3_server_operations.md)
+for terminal commands and detailed recovery guidance.
+
+## Generic remote benchmarks
+
+The additive provider-neutral benchmark CLI supports:
+
+- Datasets: SciVer, SciAtomicBench, MuSciClaims, and SciClaimEval.
 - Models: `Qwen2.5-VL-7B-Instruct`, `gemma-4-31B-it`,
-  `gemma-4-26B-A4B-it`, and `gemma-3-27b-it`
-- Datasets: `SciVer`, `SciAtomicBench`, `MuSciClaims`, and `SciClaimEval`
+  `gemma-4-26B-A4B-it`, and `gemma-3-27b-it`.
+- Existing local providers and the explicit `--provider remote` path.
 
-Create a local environment file before a live API run:
+The generic remote CLI continues to support local dotenv loading for existing
+workflows, but no credential example file is committed. Create a private,
+ignored `.env` only if that CLI workflow needs it, using exactly `API_URL` and
+`API_KEY`; unmistakably fake placeholders belong only in tests. Existing shell
+values take precedence. Offline preparation, dry-run, evaluation, and tests do
+not load or require credentials.
 
-```bash
-cp .env.example .env
-```
-
-Fill in `API_URL` with the compatible API endpoint and `API_KEY` with its
-credential. Existing shell environment values take precedence over `.env`.
-Only commands using `--live-api` require these values. Offline preparation,
-dry-run, result evaluation, and tests do not load or require them.
-`API_TIMEOUT_SECONDS` and `API_MAX_RETRIES` remain optional environment
-settings and otherwise use the existing defaults.
-
-The Meta-Harness proposer uses the local Codex CLI authentication state. Codex
-does not require or receive the solver `API_KEY` or `API_URL`.
-The proposer is fixed to `gpt-5.6-terra` with `medium` reasoning, while the
-remote OpenAI-compatible search solver is fixed to `gemma-4-26B-A4B-it`.
-
-Start with an offline dry-run. It validates and prepares one local sample but
-does not read credentials, create an HTTP client, or write a result file:
+Example offline dry-run:
 
 ```bash
 python main.py \
@@ -152,67 +192,42 @@ python main.py \
   --dry-run
 ```
 
-The four registered adapters accept their released local schemas directly and
-convert them to one leakage-safe SciVer evaluation record. Non-SciVer samples
-use `claim_type="analytical"`; SciAtomic Markdown tables are rendered to PNG.
-To materialize normalized JSON explicitly, run:
+Live generic benchmark access remains explicit through `--live-api`. See the
+[remote benchmark guide](docs/remote-benchmark.md) for supported schema
+adapters, normalization, checkpointing, evaluation, and CLI compatibility.
+
+The original local inference and evaluation entry points remain available:
 
 ```bash
-python scripts/normalize_dataset.py \
-  --dataset SciAtomicBench \
-  --dataset-path /absolute/path/to/SciAtomicBench \
-  --output outputs/normalized/sciatomic.json
+bash scripts/vllm_large.sh
+python acc_evaluation.py
 ```
 
-The offline evaluator reports per-dataset Accuracy, confusion matrix, parse
-coverage and failures, plus macro-average Accuracy across datasets.
+## Offline verification and security
 
-Live access is always explicit and requires `--live-api`. See the
-[remote benchmark guide](docs/remote-benchmark.md) for architecture, safe
-credential setup, smoke/pilot/full/resume commands, result schema, evaluation,
-retries, checkpoints, cost controls, and extension guidance.
+All tests deny or mock HTTP, socket, solver, proposer, dataset, and subprocess
+boundaries as appropriate. No test may invoke a live service or recursively
+invoke Codex.
 
-### Full-Search v3 prompt search
-
-The supported prompt-only experiment is `sciver_full_search_v3`. Use the
-[canonical server notebook](notebooks/sciver_full_search_v3_server.ipynb) for
-normal operation or the thin
-[`run_full_search_v3_server.py`](scripts/run_full_search_v3_server.py) wrapper
-for terminal operation. Both delegate preparation, isolated SMOKE receipt
-validation, SEARCH, resume, freeze, paired FINAL, and sanitized status
-reporting to the same repository interface.
-
-The workflow keeps canonical `cot`, request construction, image order, parser,
-metrics, and solver generation behavior fixed. It evaluates P0 and each prompt
-candidate on the complete immutable SEARCH split, freezes the SEARCH-only
-winner as additive `meta_cot`, and requires separate authorization for paired
-FINAL. See the [server operations guide](docs/sciver_full_search_v3_server_operations.md)
-and the [legacy removal note](docs/full_search_v3_migration.md).
-
-------
-
-## 🤝 Contributing
-
-We welcome contributions for:
-
-- 🧬 Domain extension (e.g., biology, medicine)
-- 🔧 Additional model adapters
-- 📈 New evaluation metrics and visualization tools
-
-## ✍️ Citation
-
-If you use our work and are inspired by our work, please consider cite us:
-
+```bash
+python -m compileall -q .
+pytest -q
+git diff --check
 ```
+
+Never commit or expose API credentials, Authorization headers, runtime API
+endpoints, request/response bodies, image base64, private sample identifiers,
+labels, predictions, or FINAL material. Live stages are opt-in and independent;
+module import, SETUP, OFFLINE_SMOKE, tests, and status inspection are offline.
+
+## Citation
+
+```text
 @inproceedings{wang-etal-2025-sciver,
   title     = {SciVer: Evaluating Foundation Models for Multimodal Scientific Claim Verification},
   author    = {Wang, Chengye and Shen, Yifei and Kuang, Zexi and Cohan, Arman and Zhao, Yilun},
   booktitle = {Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
   year      = {2025},
-  month     = jul,
-  address   = {Vienna, Austria},
-  publisher = {Association for Computational Linguistics},
-  pages     = {8562--8579},
-  url       = {https://aclanthology.org/2025.acl-long.420/}
+  pages     = {8562--8579}
 }
 ```

@@ -9,12 +9,14 @@ import math
 import os
 import time
 from typing import Any, Callable, Mapping, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
+DEFAULT_MODELS_PATH = "/models"
+DEFAULT_CHAT_COMPLETIONS_PATH = "/chat/completions"
 
 
 class RemoteClientError(Exception):
@@ -81,6 +83,39 @@ class UnexpectedHTTPStatusError(RemoteClientError):
 
 
 @dataclass(frozen=True)
+class CompatibleAPIEndpoints:
+    """Normalized endpoint URLs derived from one compatible API base URL."""
+
+    base_url: str
+    models_url: str
+    chat_completions_url: str
+    models_path: str
+    chat_completions_path: str
+
+
+def build_compatible_api_endpoints(
+    api_url: str,
+    *,
+    models_path: str = DEFAULT_MODELS_PATH,
+    chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH,
+) -> CompatibleAPIEndpoints:
+    """Join provider-neutral paths to an exact base URL without inserting ``/v1``."""
+
+    base_url = _normalize_base_url(api_url)
+    normalized_models_path = _normalize_transport_path(models_path, "models_path")
+    normalized_chat_path = _normalize_transport_path(
+        chat_completions_path, "chat_completions_path"
+    )
+    return CompatibleAPIEndpoints(
+        base_url=base_url,
+        models_url=base_url + normalized_models_path,
+        chat_completions_url=base_url + normalized_chat_path,
+        models_path=normalized_models_path,
+        chat_completions_path=normalized_chat_path,
+    )
+
+
+@dataclass(frozen=True)
 class RetrySettings:
     """Retry count and bounded exponential-backoff settings."""
 
@@ -117,6 +152,7 @@ class RemoteChatCompletionsClient:
         *,
         api_key: str | None = None,
         api_url: str | None = None,
+        models_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         retry_settings: RetrySettings | None = None,
         session: Any | None = None,
@@ -131,6 +167,9 @@ class RemoteChatCompletionsClient:
 
         self._api_key = _validate_api_key(resolved_api_key)
         self._api_url = _validate_api_url(resolved_api_url)
+        self._models_url = (
+            None if models_url is None else _validate_api_url(models_url)
+        )
         self._timeout = _validate_positive_number(timeout, "timeout")
         self._retry_settings = retry_settings or RetrySettings()
         if not isinstance(self._retry_settings, RetrySettings):
@@ -143,8 +182,83 @@ class RemoteChatCompletionsClient:
         self._session = requests.Session() if session is None else session
         if not callable(getattr(self._session, "post", None)):
             raise InvalidConfigurationError("session must provide a post method.")
+        if self._models_url is not None and not callable(
+            getattr(self._session, "get", None)
+        ):
+            raise InvalidConfigurationError(
+                "session must provide a get method for model-list preflight."
+            )
         self._sleep = sleep
         self.last_usage: dict[str, int] | None = None
+
+    @classmethod
+    def from_base_url(
+        cls,
+        *,
+        api_key: str | None = None,
+        api_url: str | None = None,
+        models_path: str = DEFAULT_MODELS_PATH,
+        chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH,
+        **kwargs: Any,
+    ) -> "RemoteChatCompletionsClient":
+        """Create a client whose GET and POST URLs share one exact base URL."""
+
+        resolved_api_url = os.environ.get("API_URL") if api_url is None else api_url
+        endpoints = build_compatible_api_endpoints(
+            resolved_api_url,
+            models_path=models_path,
+            chat_completions_path=chat_completions_path,
+        )
+        return cls(
+            api_key=api_key,
+            api_url=endpoints.chat_completions_url,
+            models_url=endpoints.models_url,
+            **kwargs,
+        )
+
+    def list_model_ids(self) -> tuple[str, ...]:
+        """Return only valid unique IDs from a compatible model-list object."""
+
+        if self._models_url is None:
+            raise InvalidConfigurationError(
+                "model-list preflight requires a client created from a base URL."
+            )
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        response = self._request_with_retries(
+            method="get",
+            url=self._models_url,
+            headers=headers,
+            payload=None,
+        )
+        body = _decode_response_body(response)
+        object_type = body.get("object")
+        if object_type is not None and object_type != "list":
+            raise UnexpectedResponseSchemaError(
+                "Remote API model-list response has an incompatible object type."
+            )
+        data = body.get("data")
+        if not isinstance(data, list):
+            raise UnexpectedResponseSchemaError(
+                "Remote API model-list response is missing a data list."
+            )
+        model_ids: list[str] = []
+        seen: set[str] = set()
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            identifier = item.get("id")
+            if not isinstance(identifier, str):
+                continue
+            normalized = identifier.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            model_ids.append(normalized)
+        if not model_ids:
+            raise UnexpectedResponseSchemaError(
+                "Remote API model-list response contains no valid model IDs."
+            )
+        return tuple(model_ids)
 
     def create_chat_completion(
         self,
@@ -172,23 +286,42 @@ class RemoteChatCompletionsClient:
         }
 
         self.last_usage = None
-        response = self._post_with_retries(headers, payload)
+        response = self._request_with_retries(
+            method="post",
+            url=self._api_url,
+            headers=headers,
+            payload=payload,
+        )
         body = _decode_response_body(response)
         content = _extract_content(body)
         self.last_usage = _extract_usage(body)
         return content
 
-    def _post_with_retries(
-        self, headers: Mapping[str, str], payload: Mapping[str, Any]
+    def _request_with_retries(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, Any] | None,
     ) -> Any:
         for attempt in range(self._retry_settings.max_retries + 1):
             try:
-                response = self._session.post(
-                    self._api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=self._timeout,
-                )
+                if method == "post":
+                    response = self._session.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self._timeout,
+                    )
+                elif method == "get":
+                    response = self._session.get(
+                        url,
+                        headers=headers,
+                        timeout=self._timeout,
+                    )
+                else:
+                    raise AssertionError("unsupported HTTP method")
             except requests.exceptions.InvalidJSONError:
                 raise InvalidRequestError(
                     "Remote API request payload is not JSON serializable."
@@ -250,11 +383,8 @@ class RemoteChatCompletionsClient:
 
     @staticmethod
     def _raise_for_status(response: Any, status_code: int) -> None:
-        error_code, error_message = _response_error_details(response)
         details = {
             "http_status_code": status_code,
-            "response_error_code": error_code,
-            "response_error_message": error_message,
             "retry_after_seconds": _parse_retry_after(
                 getattr(response, "headers", None)
             ),
@@ -302,7 +432,7 @@ def _validate_api_key(value: str | None) -> str:
         )
     if "\r" in value or "\n" in value:
         raise InvalidConfigurationError("API_KEY contains invalid characters.")
-    return value
+    return value.strip()
 
 
 def _validate_generation_options(
@@ -369,7 +499,8 @@ def _validate_api_url(value: str | None) -> str:
         raise InvalidConfigurationError(
             "API_URL is required to create a remote client."
         )
-    parsed = urlsplit(value)
+    normalized = value.strip()
+    parsed = urlsplit(normalized)
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
@@ -379,7 +510,36 @@ def _validate_api_url(value: str | None) -> str:
         raise InvalidConfigurationError(
             "API_URL must be an HTTP(S) URL without embedded credentials."
         )
-    return value
+    return normalized
+
+
+def _normalize_base_url(value: str | None) -> str:
+    normalized = _validate_api_url(value)
+    if any(character in normalized for character in ("\r", "\n", "\t")):
+        raise InvalidConfigurationError("API_URL contains invalid characters.")
+    parsed = urlsplit(normalized)
+    if parsed.query or parsed.fragment:
+        raise InvalidConfigurationError(
+            "API_URL base must not contain a query string or fragment."
+        )
+    path_parts = [part for part in parsed.path.split("/") if part]
+    path = "/" + "/".join(path_parts) if path_parts else ""
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _normalize_transport_path(value: str, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidConfigurationError(f"{name} must be a non-empty path.")
+    normalized = value.strip()
+    parsed = urlsplit(normalized)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        raise InvalidConfigurationError(
+            f"{name} must be a path without a URL, query string, or fragment."
+        )
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise InvalidConfigurationError(f"{name} is not a safe transport path.")
+    return "/" + "/".join(parts)
 
 
 def _validate_positive_number(value: Any, name: str) -> float:
@@ -446,40 +606,6 @@ def _decode_response_body(response: Any) -> dict[str, Any]:
     return body
 
 
-def _response_error_details(response: Any) -> tuple[str | None, str | None]:
-    """Extract bounded diagnostic fields without retaining the response body."""
-
-    try:
-        body = response.json()
-    except (AttributeError, TypeError, ValueError):
-        body = None
-
-    code: Any = None
-    message: Any = None
-    if isinstance(body, Mapping):
-        error = body.get("error")
-        if isinstance(error, Mapping):
-            code = error.get("code", error.get("type"))
-            message = error.get("message")
-        else:
-            code = body.get("code", body.get("type"))
-            message = body.get("message", body.get("detail"))
-
-    return (
-        _bounded_error_text(code),
-        _bounded_error_text(message),
-    )
-
-
-def _bounded_error_text(value: Any) -> str | None:
-    if value is None or isinstance(value, (Mapping, list, tuple, set)):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    return text[:2000]
-
-
 def _extract_content(body: Mapping[str, Any]) -> str:
 
     choices = body.get("choices")
@@ -523,6 +649,9 @@ def _extract_usage(body: Mapping[str, Any]) -> dict[str, int] | None:
 
 __all__ = [
     "AuthenticationError",
+    "CompatibleAPIEndpoints",
+    "DEFAULT_CHAT_COMPLETIONS_PATH",
+    "DEFAULT_MODELS_PATH",
     "DEFAULT_TIMEOUT_SECONDS",
     "InvalidConfigurationError",
     "InvalidRequestError",
@@ -537,4 +666,5 @@ __all__ = [
     "ServerError",
     "UnexpectedHTTPStatusError",
     "UnexpectedResponseSchemaError",
+    "build_compatible_api_endpoints",
 ]

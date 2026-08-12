@@ -174,9 +174,10 @@ importable or documented execution path.
    then separately executes the paired P0/P* FINAL evaluation under a one-time
    completion receipt.
 9. **Thin notebook interface** calls the preparation, preflight, SEARCH,
-   freeze, and FINAL repository entry points. It may clone/pull and install the
-   repository and set runtime paths, but it contains no experiment or business
-   logic of its own.
+   freeze, and FINAL repository entry points from an already cloned, pinned,
+   clean checkout. Environment creation and dependency installation happen
+   before JupyterLab starts. The notebook validates but never changes the
+   checkout and contains no experiment or business logic of its own.
 
 ## 7. Artifact layout
 
@@ -285,13 +286,16 @@ full live experiment is still not required during implementation.
 
 ### Milestone 6 — server Jupyter Notebook and thin execution interface
 
-Create one simple, readable server-oriented notebook, for example
-`notebooks/sciver_full_search_v3_server.ipynb`. It may clone/pull the
-repository, install the repository/environment, define `DATA_ROOT` and a
-workspace/run path, and call the deterministic preparation code from M1. It
-configures `API_URL` and `API_KEY` only at runtime (from the server environment
-or hidden input such as `getpass` for the key), performs local/preflight
-validation, and may make one minimal explicitly authorized live smoke request.
+Create one simple, readable server-oriented notebook at
+`notebooks/sciver_full_search_v3_server.ipynb`. It locates an already cloned
+repository, requires the canonical origin, a non-placeholder pinned 40-character
+commit, and a clean worktree, and fails closed without changing the checkout.
+Environment creation and dependency installation precede JupyterLab. The
+notebook defines runtime paths and calls the deterministic preparation code
+from M1. It configures `API_URL` and `API_KEY` only at runtime (from the server
+environment or hidden input such as `getpass` for the key), performs
+local/preflight validation, and may make one minimal explicitly authorized live
+smoke request after a model-list preflight.
 
 The notebook then calls the repository SEARCH entry point, displays the SEARCH
 summary and winner, calls repository freeze, calls the paired FINAL entry point,
@@ -319,9 +323,10 @@ remain. No live SMOKE, SEARCH, or FINAL execution was performed.
 
 The real full SEARCH/FINAL experiment is deliberately deferred until the
 codebase and notebook are complete. It is performed by the operator only after
-they clone/pull the finalized Git commit, configure dataset/workspace and
-runtime credentials, run preflight, explicitly authorize a minimal live smoke
-request, run SEARCH, freeze P*, run paired FINAL, and inspect/export results.
+they manually clone and pin the finalized Git commit, configure
+dataset/workspace and runtime credentials, run preflight, explicitly authorize
+a minimal live smoke request, run SEARCH, freeze P*, run paired FINAL, and
+inspect/export results.
 
 ## 10. Unit test plan
 
@@ -428,13 +433,15 @@ conceptual workflow is:
 
 ```text
 Git repository
-  -> clone/pull on server
-  -> install repository/environment
+  -> manually clone and pin a clean checkout on server
+  -> create and install the environment before JupyterLab
   -> provide SciVer dataset path and workspace/run path
+  -> validate origin, pinned HEAD, clean status, metadata, and imports
   -> call repository deterministic preparation
-  -> configure runtime API_URL/API_KEY
-  -> repository preflight
-  -> optional minimal explicitly authorized live smoke request
+  -> repository-owned OFFLINE_SMOKE
+  -> exact LIVE_SMOKE confirmation, runtime API_URL/API_KEY
+  -> GET model-list preflight and one canonical P0 smoke POST
+  -> validate the compatible sanitized smoke receipt
   -> repository SEARCH engine
   -> inspect SEARCH winner
   -> repository freeze
@@ -442,9 +449,8 @@ Git repository
   -> inspect/export results
 ```
 
-Credentials may be set in a notebook process with environment variables such
-as `os.environ["API_URL"] = ...` and hidden input for `API_KEY`, or inherited
-from the server environment. They must never be stored in the committed
+Credentials may be inherited from the server environment or entered at runtime,
+with hidden input for `API_KEY`. They must never be stored in the committed
 notebook, repository, or result artifacts. Reusing the same workspace/run path
 passes the durable run identity to repository entry points for resume.
 

@@ -100,6 +100,9 @@ class _FakeFinalSolver:
         self.interrupt_after = interrupt_after
         self.calls: list[str] = []
 
+    def list_model_ids(self):
+        return ("Qwen/Qwen3.5-35B-A3B",)
+
     def complete(self, request: SolverRequest) -> SolverResult:
         if self.interrupt_after is not None and len(self.calls) == self.interrupt_after:
             raise RuntimeError("simulated offline interruption")
@@ -244,7 +247,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         search_safe_manifest_path=prepared["search_safe_manifest_path"],
         search_records_path=prepared["search_dataset_path"],
         authorize_smoke_execution=True,
-        api_url="offline-runtime-url",
+        api_url="https://invalid.example.test/base",
         api_key="unmistakably-fake-key",
         source_commit=COMMIT,
     )
@@ -256,7 +259,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         search_safe_manifest_path=prepared["search_safe_manifest_path"],
         search_records_path=prepared["search_dataset_path"],
         authorize_smoke_execution=True,
-        api_url="offline-runtime-url",
+        api_url="https://invalid.example.test/base",
         api_key="unmistakably-fake-key",
         source_commit=COMMIT,
     )
@@ -268,7 +271,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         search_safe_manifest_path=prepared["search_safe_manifest_path"],
         search_records_path=prepared["search_dataset_path"],
         authorize_search_execution=True,
-        api_url="offline-runtime-url",
+        api_url="https://invalid.example.test/base",
         api_key="unmistakably-fake-key",
         source_commit=COMMIT,
     )
@@ -330,7 +333,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
             private_manifest_path=prepared["private_manifest_path"],
             search_safe_manifest_path=prepared["search_safe_manifest_path"],
             authorize_final_execution=True,
-            api_url="offline-runtime-url",
+            api_url="https://invalid.example.test/base",
             api_key="unmistakably-fake-key",
         )
     resumed = _FakeFinalSolver()
@@ -342,7 +345,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         private_manifest_path=prepared["private_manifest_path"],
         search_safe_manifest_path=prepared["search_safe_manifest_path"],
         authorize_final_execution=True,
-        api_url="offline-runtime-url",
+        api_url="https://invalid.example.test/base",
         api_key="unmistakably-fake-key",
     )
     assert len(interrupted.calls) + len(resumed.calls) == 2000

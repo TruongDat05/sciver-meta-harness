@@ -17,6 +17,7 @@ from meta_harness.full_search_v3_solver import (
     build_solver_request,
     create_live_solver_client,
     execute_solver_request,
+    preflight_live_solver_model_list,
 )
 from model_inference.remote_api import prepare_remote_requests
 from model_inference.remote_config import RemoteAPIConfig
@@ -178,6 +179,66 @@ def test_live_factory_propagates_exact_model_and_generation(monkeypatch, tmp_pat
         content="Answer: no",
         usage={"input_tokens": 10, "output_tokens": 2},
     )
+
+
+def test_live_factory_base_mode_and_sanitized_locked_model_preflight(monkeypatch):
+    import model_inference.remote_client as remote_client
+    import model_inference.remote_config as remote_config
+
+    low_level_client = Mock()
+    low_level_client.list_model_ids.return_value = (
+        "Qwen/Qwen3.5-35B-A3B",
+        "another-model",
+    )
+    config = RemoteAPIConfig(
+        api_key=FAKE_API_KEY,
+        api_url="https://invalid.example.test/base",
+        timeout_seconds=9.0,
+        max_retries=3,
+    )
+    monkeypatch.setattr(
+        remote_config,
+        "validate_config_for_live_request",
+        Mock(return_value=config),
+    )
+    base_factory = Mock(return_value=low_level_client)
+    monkeypatch.setattr(
+        remote_client.RemoteChatCompletionsClient,
+        "from_base_url",
+        base_factory,
+    )
+
+    client = create_live_solver_client(
+        allow_live_requests=True,
+        api_url_is_base=True,
+    )
+    summary = preflight_live_solver_model_list(client)
+
+    assert summary["status"] == "passed"
+    assert summary["model_count"] == 2
+    assert set(summary) == {
+        "schema_version",
+        "status",
+        "model_count",
+        "model_ids_sha256",
+        "locked_model_sha256",
+    }
+    assert "Qwen/Qwen3.5-35B-A3B" not in str(summary)
+    base_factory.assert_called_once()
+    assert base_factory.call_args.kwargs["api_url"] == config.api_url
+    assert base_factory.call_args.kwargs["models_path"] == "/models"
+    assert (
+        base_factory.call_args.kwargs["chat_completions_path"]
+        == "/chat/completions"
+    )
+
+
+def test_locked_model_preflight_never_selects_an_arbitrary_model():
+    client = Mock()
+    client.list_model_ids.return_value = ("another-model",)
+
+    with pytest.raises(FullSearchV3SolverError, match="immutable V3 solver"):
+        preflight_live_solver_model_list(client)
 
 
 def test_import_has_no_client_network_or_credential_side_effect():

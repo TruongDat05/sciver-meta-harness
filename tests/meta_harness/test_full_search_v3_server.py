@@ -17,6 +17,7 @@ from meta_harness.full_search_v3_solver import SolverResult
 
 RUN_ID = "server_offline"
 COMMIT = "a" * 40
+PINNED_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 SOLVER_IDENTITY = "b" * 64
 
 
@@ -80,7 +81,7 @@ def _state(status: str = "running") -> dict[str, object]:
 
 @pytest.fixture
 def offline_search(monkeypatch, tmp_path):
-    search_input = _search_input()
+    search_input = _smoke_search_input(tmp_path)
     monkeypatch.setattr(server, "load_full_search_v3_search_input", lambda **_kwargs: search_input)
     monkeypatch.setattr(server.shutil, "which", lambda _command: "/fake/bin/proposer")
     monkeypatch.setattr(server, "_source_commit", lambda _root, _supplied: COMMIT)
@@ -261,6 +262,9 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
     dispatched = []
 
     class FakeSolver:
+        def list_model_ids(self):
+            return ("Qwen/Qwen3.5-35B-A3B", "another-model")
+
         def complete(self, request):
             dispatched.append(request)
             return SolverResult(content="Therefore, the final answer is: Answer: yes")
@@ -285,6 +289,8 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
 
     assert len(dispatched) == 1
     assert first["status"] == "complete" and first["logical_calls"] == 1
+    assert first["model_list_preflight"]["status"] == "passed"
+    assert first["model_list_preflight"]["model_count"] == 2
     assert first["reused"] is False and second["reused"] is True
     assert "GROUND_TRUTH_MUST_NOT_LEAK" not in str(dispatched[0].messages)
     receipt_text = server.full_search_v3_server_smoke_receipt_path(
@@ -303,6 +309,119 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
     with pytest.raises(server.FullSearchV3ServerError, match="SMOKE receipt is incompatible"):
         server.run_full_search_v3_server_smoke(**arguments)
     assert len(dispatched) == 1
+
+
+def test_checkout_validation_rejects_placeholder_origin_head_and_dirty_state(
+    monkeypatch, tmp_path
+):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "requirements.txt").touch()
+    (tmp_path / "notebooks").mkdir()
+    (tmp_path / "notebooks" / "sciver_full_search_v3_server.ipynb").touch()
+    (tmp_path / "meta_harness").mkdir()
+    (tmp_path / "meta_harness" / "full_search_v3_server.py").touch()
+
+    for placeholder in ("0" * 40, "a" * 40, "REPLACE_WITH_COMMIT"):
+        with pytest.raises(server.FullSearchV3ServerError, match="non-placeholder"):
+            server.validate_full_search_v3_server_checkout(
+                repository_root=tmp_path,
+                pinned_commit_sha=placeholder,
+            )
+
+    values = {
+        ("rev-parse", "--show-toplevel"): str(tmp_path),
+        ("remote", "get-url", "origin"): "https://invalid.example.test/wrong.git",
+        ("rev-parse", "HEAD"): PINNED_COMMIT,
+        ("status", "--porcelain=v1", "--untracked-files=all"): "",
+    }
+    monkeypatch.setattr(
+        server,
+        "_git_output",
+        lambda _root, *args, **_kwargs: values[args],
+    )
+    with pytest.raises(server.FullSearchV3ServerError, match="origin"):
+        server.validate_full_search_v3_server_checkout(
+            repository_root=tmp_path,
+            pinned_commit_sha=PINNED_COMMIT,
+        )
+
+    values[("remote", "get-url", "origin")] = server.EXPECTED_REPOSITORY_ORIGIN
+    values[("rev-parse", "HEAD")] = "89abcdef0123456789abcdef0123456789abcdef"
+    with pytest.raises(server.FullSearchV3ServerError, match="PINNED_COMMIT_SHA"):
+        server.validate_full_search_v3_server_checkout(
+            repository_root=tmp_path,
+            pinned_commit_sha=PINNED_COMMIT,
+        )
+
+    values[("rev-parse", "HEAD")] = PINNED_COMMIT
+    values[("status", "--porcelain=v1", "--untracked-files=all")] = "?? local.txt"
+    with pytest.raises(server.FullSearchV3ServerError, match="not clean"):
+        server.validate_full_search_v3_server_checkout(
+            repository_root=tmp_path,
+            pinned_commit_sha=PINNED_COMMIT,
+        )
+
+    values[("status", "--porcelain=v1", "--untracked-files=all")] = ""
+    status = server.validate_full_search_v3_server_checkout(
+        repository_root=tmp_path,
+        pinned_commit_sha=PINNED_COMMIT,
+    )
+    assert status == {
+        "operation": "checkout_validation",
+        "status": "passed",
+        "origin": server.EXPECTED_REPOSITORY_ORIGIN,
+        "source_commit": PINNED_COMMIT,
+        "worktree_clean": True,
+        "dependency_metadata": "requirements.txt",
+    }
+
+
+def test_solver_identity_normalizes_base_and_binds_transport_paths():
+    first = server.solver_identity_from_api_url(
+        " https://invalid.example.test/api/// "
+    )
+    equivalent = server.solver_identity_from_api_url(
+        "https://invalid.example.test/api"
+    )
+    changed_path = server.solver_identity_from_api_url(
+        "https://invalid.example.test/api",
+        chat_completions_path="/different/completions",
+    )
+
+    assert first == equivalent
+    assert changed_path != first
+
+
+def test_runtime_credentials_normalize_and_reject_unsafe_values(monkeypatch):
+    url, key = server._runtime_credentials(
+        api_url=" https://invalid.example.test/base/// ",
+        api_key="  unmistakably-fake-key  ",
+    )
+    assert url == "https://invalid.example.test/base"
+    assert key == "unmistakably-fake-key"
+
+    with pytest.raises(server.FullSearchV3ServerError, match="invalid characters"):
+        server._runtime_credentials(
+            api_url="https://invalid.example.test/base",
+            api_key="unmistakably-fake-key\n",
+        )
+    with pytest.raises(server.FullSearchV3ServerError, match="safe base URL"):
+        server._runtime_credentials(
+            api_url="https://invalid.example.test/base?query=value",
+            api_key="unmistakably-fake-key",
+        )
+
+
+def test_model_list_preflight_missing_locked_model_fails_without_solver_post():
+    class MissingModelClient:
+        def list_model_ids(self):
+            return ("another-model",)
+
+        def complete(self, _request):
+            pytest.fail("missing model dispatched a solver request")
+
+    with pytest.raises(server.FullSearchV3ServerError, match="missing_locked_model"):
+        server._run_model_list_preflight(MissingModelClient())
 
 
 def test_full_search_requires_compatible_smoke_receipt_before_client(

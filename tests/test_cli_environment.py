@@ -62,16 +62,12 @@ def test_dotenv_secret_is_redacted_from_persisted_cli_failure(
     assert "[REDACTED]" in serialized
 
 
-def test_git_ignores_local_dotenv_variants_but_not_example():
-    for path in (".env", ".env.local", ".env.test"):
+def test_git_ignores_local_dotenv_variants_and_no_example_is_committed():
+    example_path = ".env" + ".example"
+    for path in (".env", ".env.local", ".env.test", example_path):
         ignored = subprocess.run(
-            ["git", "check-ignore", "-q", path],
+            ["git", "check-ignore", "--no-index", "-q", path],
             check=False,
         )
         assert ignored.returncode == 0
-    example = subprocess.run(
-        ["git", "check-ignore", "-q", ".env.example"],
-        check=False,
-    )
-
-    assert example.returncode == 1
+    assert not os.path.exists(example_path)
