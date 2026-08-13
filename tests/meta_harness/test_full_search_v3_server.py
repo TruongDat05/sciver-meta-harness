@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import MappingProxyType
 
@@ -135,6 +136,10 @@ def test_search_preflight_is_dry_run_and_never_constructs_clients(
     assert status["resume"] is False
     assert status["workload"]["maximum_search_logical_calls"] == 41000
     assert status["solver"]["identity_sha256"] == SOLVER_IDENTITY
+    assert status["solver"]["model"] == "Qwen3.6-35B-A3B"
+    assert status["config_sha256"] == (
+        "7ce90e21d6dac359c2fb2fb3bdd22c670b7dba31185801ffe318fa6042d4aea4"
+    )
     assert set(status["checkpoints"]) == {
         "smoke_receipt_path",
         "search_state_path",
@@ -263,7 +268,7 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
 
     class FakeSolver:
         def list_model_ids(self):
-            return ("Qwen/Qwen3.5-35B-A3B", "another-model")
+            return ("Qwen3.6-35B-A3B", "another-model")
 
         def complete(self, request):
             dispatched.append(request)
@@ -306,6 +311,26 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
         assert forbidden not in receipt_text
 
     monkeypatch.setattr(server, "solver_identity_from_api_url", lambda _value: "e" * 64)
+    with pytest.raises(server.FullSearchV3ServerError, match="SMOKE receipt is incompatible"):
+        server.run_full_search_v3_server_smoke(**arguments)
+    assert len(dispatched) == 1
+
+    monkeypatch.setattr(
+        server,
+        "solver_identity_from_api_url",
+        lambda _value: SOLVER_IDENTITY,
+    )
+    receipt_path = server.full_search_v3_server_smoke_receipt_path(tmp_path, RUN_ID)
+    previous_model_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    previous_model_receipt["identity"]["solver"]["model"] = (
+        "Qwen/Qwen3.5-35B-A3B"
+    )
+    previous_model_receipt["identity_sha256"] = server._sha256_json(
+        previous_model_receipt["identity"]
+    )
+    receipt_path.write_text(json.dumps(previous_model_receipt), encoding="utf-8")
+
+    assert previous_model_receipt["identity_sha256"] != first["identity_sha256"]
     with pytest.raises(server.FullSearchV3ServerError, match="SMOKE receipt is incompatible"):
         server.run_full_search_v3_server_smoke(**arguments)
     assert len(dispatched) == 1

@@ -107,7 +107,7 @@ official live experiment and is not an active or compatible protocol.
   parser, labels, claims, context, captions, image number/order, and solver
   generation semantics are frozen. Expose a winner only as additive
   `meta_cot`.
-- The fixed solver is Qwen/Qwen3.5-35B-A3B through the generic compatible HTTP
+- The fixed solver is Qwen3.6-35B-A3B through the generic compatible HTTP
   boundary. Read its endpoint only from `API_URL` and credentials only from
   `API_KEY`; never persist either.
 - Select exactly 2,000 SciVer samples with seed 42: exactly 1000 paper-disjoint

@@ -10,7 +10,7 @@ Full-Search v3 evaluates canonical P0 and one prompt-family candidate per
 iteration on the same complete 1,000-record SEARCH split, freezes the
 SEARCH-only winner as additive `meta_cot`, and then permits a separately
 authorized paired P0/P* evaluation on the isolated 1,000-record FINAL split.
-The solver is fixed to `Qwen/Qwen3.5-35B-A3B`; the production generation
+The solver is fixed to `Qwen3.6-35B-A3B`; the production generation
 settings remain `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming,
 and `max_tokens=8192`.
 

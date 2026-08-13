@@ -60,7 +60,7 @@ POST {API_URL}/chat/completions
 
 It strips redundant join slashes, never inserts `/v1`, and rejects embedded
 credentials, query strings, and fragments. LIVE_SMOKE first requires the
-locked `Qwen/Qwen3.5-35B-A3B` model in the sanitized model list, then sends
+locked `Qwen3.6-35B-A3B` model in the sanitized model list, then sends
 exactly one canonical P0 SEARCH-safe logical request and requires canonical
 parsing. The receipt stores only source/config/split/request/parser/deployment/
 transport identities, safe model-list hashes/counts, one logical call, and

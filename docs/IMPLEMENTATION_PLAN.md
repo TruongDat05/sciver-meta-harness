@@ -34,7 +34,7 @@ select, using SEARCH data only, the best of canonical P0 (`cot`) and all valid
 prompt candidates. The offline-frozen winner is P*. FINAL is a one-time,
 paired evaluation of frozen P0 and frozen P* and is never optimization input.
 
-The fixed solver is Qwen/Qwen3.5-35B-A3B served through a vLLM
+The fixed solver is Qwen3.6-35B-A3B served through a vLLM
 OpenAI-compatible HTTP endpoint. Python owns all inference orchestration,
 metrics, caching, retries, persistence, and selection. Codex CLI is a prompt
 proposer only.
@@ -248,12 +248,12 @@ or baseline-error inputs to split membership and fail explicitly when exact
 allocation is impossible. Persist immutable manifests and test resume identity.
 Status: complete; the released 2,000-row source deterministically produces
 1,000 SEARCH rows across 392 papers and 1,000 FINAL rows across 394 papers,
-with split SHA-256
-`8e5f28db7669026a4c419c972da4bb1caacf4ece0e2f1b8b7b8ab1dca204ec8c`.
+with model-bound split SHA-256
+`af5e41f77da16d0e2013ff10dcc1d6140520b22b89274b59dc55060814e068cf`.
 
 ### Milestone 2 — solver boundary, cache, retries, concurrency
 
-Define an injected solver interface for Qwen/Qwen3.5-35B-A3B through the
+Define an injected solver interface for Qwen3.6-35B-A3B through the
 generic compatible HTTP boundary. Add explicit live gating, safe cache keys,
 bounded retry rules, request-level locking/concurrency, and redaction. No
 module import may create a client or request.
@@ -410,7 +410,7 @@ Before any opt-in live run, verify locally and without exposing secrets:
 
 - `API_URL` and `API_KEY` are supplied only at notebook/process runtime and
   are not committed or persisted; interactive key entry is hidden.
-- The selected model is exactly Qwen/Qwen3.5-35B-A3B and the server presents
+- The selected model is exactly Qwen3.6-35B-A3B and the server presents
   the required compatible chat-completions interface.
 - Generation semantics, timeout, retry policy, concurrency limit, request
   size/image support, and usage fields are frozen into the run identity.

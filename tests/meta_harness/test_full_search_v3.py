@@ -50,7 +50,7 @@ def test_canonical_v3_configuration_is_complete_and_locked():
         "patience": 8,
         "proposal_attempts": 3,
         "solver": {
-            "model": "Qwen/Qwen3.5-35B-A3B",
+            "model": "Qwen3.6-35B-A3B",
             "temperature": 0,
             "top_p": 1,
             "seed": 42,
@@ -67,6 +67,18 @@ def test_changed_v3_configuration_invariant_is_rejected():
 
     with pytest.raises(MetaHarnessConfigError, match="search_size is locked"):
         FullSearchV3Config.from_mapping(values)
+
+
+def test_previous_solver_model_is_not_resume_compatible():
+    values = canonical_full_search_v3_config().as_dict()
+    current_identity = canonical_full_search_v3_config().sha256()
+    values["solver"]["model"] = "Qwen/Qwen3.5-35B-A3B"
+
+    with pytest.raises(MetaHarnessConfigError, match="solver_model is locked"):
+        FullSearchV3Config.from_mapping(values)
+
+    assert current_identity == "7ce90e21d6dac359c2fb2fb3bdd22c670b7dba31185801ffe318fa6042d4aea4"
+    assert current_identity != "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
 
 
 def test_released_sample_identity_is_unique_order_independent_and_label_free(

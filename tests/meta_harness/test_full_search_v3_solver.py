@@ -69,7 +69,7 @@ def test_injected_fake_receives_existing_request_builder_output(tmp_path):
 
     assert fake.requests == [request]
     assert list(request.messages) == expected_messages
-    assert request.model == "Qwen/Qwen3.5-35B-A3B"
+    assert request.model == "Qwen3.6-35B-A3B"
     assert request.generation.as_request_options() == {
         "temperature": 0,
         "top_p": 1,
@@ -164,7 +164,7 @@ def test_live_factory_propagates_exact_model_and_generation(monkeypatch, tmp_pat
     client_factory.assert_called_once()
     assert client_factory.call_args.kwargs["retry_settings"].max_retries == 0
     low_level_client.create_chat_completion.assert_called_once_with(
-        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen3.6-35B-A3B",
         request.messages,
         generation_options={
             "temperature": 0,
@@ -187,7 +187,7 @@ def test_live_factory_base_mode_and_sanitized_locked_model_preflight(monkeypatch
 
     low_level_client = Mock()
     low_level_client.list_model_ids.return_value = (
-        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen3.6-35B-A3B",
         "another-model",
     )
     config = RemoteAPIConfig(
@@ -223,7 +223,7 @@ def test_live_factory_base_mode_and_sanitized_locked_model_preflight(monkeypatch
         "model_ids_sha256",
         "locked_model_sha256",
     }
-    assert "Qwen/Qwen3.5-35B-A3B" not in str(summary)
+    assert "Qwen3.6-35B-A3B" not in str(summary)
     base_factory.assert_called_once()
     assert base_factory.call_args.kwargs["api_url"] == config.api_url
     assert base_factory.call_args.kwargs["models_path"] == "/models"

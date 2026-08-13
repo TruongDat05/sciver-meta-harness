@@ -284,6 +284,24 @@ def test_incompatible_resume_identity_is_rejected(tmp_path):
         ).state()
 
 
+def test_previous_model_run_identity_is_not_resumable(tmp_path):
+    proposer = FakeProposer()
+    evaluator = FakeEvaluator()
+    orchestration = _orchestrator(tmp_path, proposer, evaluator)
+    state = orchestration.state()
+
+    assert state["identity"]["config_sha256"] == (
+        "7ce90e21d6dac359c2fb2fb3bdd22c670b7dba31185801ffe318fa6042d4aea4"
+    )
+    state["identity"]["config_sha256"] = (
+        "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
+    )
+    orchestration.state_path.write_text(canonical_json(state), encoding="utf-8")
+
+    with pytest.raises(FullSearchV3ResumeError, match="run identity is incompatible"):
+        _orchestrator(tmp_path, proposer, evaluator).state()
+
+
 def test_accepted_receipt_recovers_without_reproposing_after_interruption(tmp_path):
     templates = {
         method: source + "\nRecovered independent check."

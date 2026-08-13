@@ -28,7 +28,7 @@ IMAGE_DATA = "A" * 160
 
 def _request():
     return SolverRequest(
-        model="Qwen/Qwen3.5-35B-A3B",
+        model="Qwen3.6-35B-A3B",
         messages=(
             {
                 "role": "user",
@@ -121,6 +121,24 @@ def test_cache_isolated_across_every_request_identity_dimension(tmp_path, change
     assert incompatible.sha256() != identity.sha256()
     assert cache.get(incompatible) is None
     assert cache.get(identity) == _result()
+
+
+def test_previous_model_cache_entry_remains_isolated_and_untouched(tmp_path):
+    cache = FullSearchV3SearchCache(tmp_path / "cache")
+    current_identity = _identity()
+    previous_identity = replace(
+        current_identity,
+        config_sha256="9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517",
+        solver_model="Qwen/Qwen3.5-35B-A3B",
+        request_payload_sha256="6" * 64,
+    )
+    cache.put(previous_identity, _result())
+    previous_bytes = cache.entry_path(previous_identity).read_bytes()
+
+    assert current_identity.sha256() != previous_identity.sha256()
+    assert cache.get(current_identity) is None
+    assert cache.get(previous_identity) == _result()
+    assert cache.entry_path(previous_identity).read_bytes() == previous_bytes
 
 
 def test_atomic_interruption_leaves_a_miss_and_retry_recovers(
