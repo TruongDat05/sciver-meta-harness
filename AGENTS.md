@@ -7,16 +7,9 @@ These rules apply to the entire repository. Keep all work aligned with the proje
 Extend SciVer with a generic OpenAI-compatible remote API provider while preserving the existing system. The implementation must support these evaluation datasets:
 
 - SciVer
-- SciAtomicBench
-- MuSciClaims
-- SciClaimEval
 
 It must support these models:
-
-- Qwen2.5-VL-7B-Instruct
-- gemma-4-31B-it
-- gemma-4-26B-A4B-it
-- gemma-3-27b-it
+- Qwen3.6-35B-A3B
 
 ## Privacy and security
 

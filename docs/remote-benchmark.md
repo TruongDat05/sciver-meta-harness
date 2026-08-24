@@ -1,12 +1,14 @@
-# Remote OpenAI-compatible API benchmark guide
+# Compatible-HTTP benchmark guide
 
-SciVer includes an additive, provider-neutral path for running multimodal
-scientific claim verification through a remote OpenAI-compatible API. The
-legacy providers and local inference path remain available and unchanged.
+This guide covers the generic benchmark CLI. It is independent from the
+SciVer-only Meta-Harness Meta-Harness and its server runbook; it has its own dataset
+adapters, model matrix, output/checkpoint workflow, and complete-URL contract.
 
-Live access is opt-in. A remote request can be sent only when the command uses
-both `--provider remote` and `--live-api`. Imports, tests, and dry-runs remain
-offline, and the remote path never downloads model weights.
+SciVer includes an additive compatible-HTTP path for multimodal scientific
+claim verification. Existing local inference paths remain available and
+unchanged. Live access is opt-in: a request can be sent only when the command
+uses both `--provider remote` and `--live-api`. Imports, tests, and dry-runs
+remain offline, and this path never downloads model weights.
 
 ## Supported experiment matrix
 
@@ -89,7 +91,7 @@ repeated raw IDs cannot collide. All non-SciVer records receive
 `claim_type="analytical"`. Schemas without context receive the explicit text
 `No additional context is provided.`; no evidence or rationale is invented.
 Non-SciVer records use the unified flat schema. SciVer records with
-`paper_path` retain the legacy paper, section, and evidence pointers so the
+`paper_path` retain the established paper, section, and evidence pointers so the
 original prompt-construction path remains authoritative. `gold_label` is kept
 only on labeled records and is never model-visible.
 
@@ -404,7 +406,7 @@ python scripts/inspect_dataset.py \
 Inspect representative records and explicitly define a strict adapter into a
 local JSON top-level list. The flat single-evidence contract uses `sample_id`,
 `claim_type`, `claim`, `context`, `caption`, `image_path`, and `gold_label`.
-The legacy SciVer pointer contract remains supported: common fields are
+The established SciVer pointer contract remains supported: common fields are
 `claim_type`, `claim`, `paper_path`, and `section`; direct and analytical
 records require `type`, `item`, and `image_path`; parallel and sequential
 records require `item1_type`, `item1`, `item1_path`, `item2_type`, `item2`, and

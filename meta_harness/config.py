@@ -1,4 +1,4 @@
-"""Locked configuration for the SciVer Full-Search V3 workflow."""
+"""Locked configuration for the SciVer Meta-Harness workflow."""
 
 from __future__ import annotations
 
@@ -25,88 +25,88 @@ SUPPORTED_REASONING_EFFORTS = (
     "ultra",
 )
 
-FULL_SEARCH_V3_PROTOCOL_ID = "sciver_full_search_v3"
-FULL_SEARCH_V3_SEARCH_SIZE = 1000
-FULL_SEARCH_V3_FINAL_SIZE = 1000
-FULL_SEARCH_V3_SPLIT_SEED = 42
-FULL_SEARCH_V3_CANDIDATES_PER_ITERATION = 1
-FULL_SEARCH_V3_MIN_ITERATIONS = 15
-FULL_SEARCH_V3_MAX_ITERATIONS = 40
-FULL_SEARCH_V3_PATIENCE = 8
-FULL_SEARCH_V3_PROPOSAL_ATTEMPTS = 3
-FULL_SEARCH_V3_SOLVER_MODEL = "Qwen3.6-35B-A3B"
-FULL_SEARCH_V3_SOLVER_TEMPERATURE = 0
-FULL_SEARCH_V3_SOLVER_TOP_P = 1
-FULL_SEARCH_V3_SOLVER_SEED = 42
-FULL_SEARCH_V3_SOLVER_N = 1
-FULL_SEARCH_V3_SOLVER_STREAM = False
-FULL_SEARCH_V3_SOLVER_MAX_TOKENS = 8192
+EXPERIMENT_PROTOCOL_ID = "sciver_full_search_v3"
+EXPERIMENT_SEARCH_SIZE = 1000
+EXPERIMENT_FINAL_SIZE = 1000
+EXPERIMENT_SPLIT_SEED = 42
+EXPERIMENT_CANDIDATES_PER_ITERATION = 1
+EXPERIMENT_MIN_ITERATIONS = 15
+EXPERIMENT_MAX_ITERATIONS = 40
+EXPERIMENT_PATIENCE = 8
+EXPERIMENT_PROPOSAL_ATTEMPTS = 3
+EXPERIMENT_SOLVER_MODEL = "Qwen3.6-35B-A3B"
+EXPERIMENT_SOLVER_TEMPERATURE = 0
+EXPERIMENT_SOLVER_TOP_P = 1
+EXPERIMENT_SOLVER_SEED = 42
+EXPERIMENT_SOLVER_N = 1
+EXPERIMENT_SOLVER_STREAM = False
+EXPERIMENT_SOLVER_MAX_TOKENS = 8192
 
 
 class MetaHarnessConfigError(ValueError):
-    """Raised when the locked Full-Search V3 configuration is invalid."""
+    """Raised when the locked Meta-Harness configuration is invalid."""
 
 
 @dataclass(frozen=True)
-class FullSearchV3Config:
+class Config:
     """The locked configuration for ``sciver_full_search_v3``.
 
-    Every value contributes to an immutable V3 run identity and must equal
+    Every value contributes to an immutable run identity and must equal
     the approved protocol contract.
     """
 
-    protocol_id: str = FULL_SEARCH_V3_PROTOCOL_ID
-    search_size: int = FULL_SEARCH_V3_SEARCH_SIZE
-    final_size: int = FULL_SEARCH_V3_FINAL_SIZE
-    split_seed: int = FULL_SEARCH_V3_SPLIT_SEED
-    candidate_count_per_iteration: int = FULL_SEARCH_V3_CANDIDATES_PER_ITERATION
-    min_iterations: int = FULL_SEARCH_V3_MIN_ITERATIONS
-    max_iterations: int = FULL_SEARCH_V3_MAX_ITERATIONS
-    patience: int = FULL_SEARCH_V3_PATIENCE
-    proposal_attempts: int = FULL_SEARCH_V3_PROPOSAL_ATTEMPTS
-    solver_model: str = FULL_SEARCH_V3_SOLVER_MODEL
-    solver_temperature: int = FULL_SEARCH_V3_SOLVER_TEMPERATURE
-    solver_top_p: int = FULL_SEARCH_V3_SOLVER_TOP_P
-    solver_seed: int = FULL_SEARCH_V3_SOLVER_SEED
-    solver_n: int = FULL_SEARCH_V3_SOLVER_N
-    solver_stream: bool = FULL_SEARCH_V3_SOLVER_STREAM
-    solver_max_tokens: int = FULL_SEARCH_V3_SOLVER_MAX_TOKENS
+    protocol_id: str = EXPERIMENT_PROTOCOL_ID
+    search_size: int = EXPERIMENT_SEARCH_SIZE
+    final_size: int = EXPERIMENT_FINAL_SIZE
+    split_seed: int = EXPERIMENT_SPLIT_SEED
+    candidate_count_per_iteration: int = EXPERIMENT_CANDIDATES_PER_ITERATION
+    min_iterations: int = EXPERIMENT_MIN_ITERATIONS
+    max_iterations: int = EXPERIMENT_MAX_ITERATIONS
+    patience: int = EXPERIMENT_PATIENCE
+    proposal_attempts: int = EXPERIMENT_PROPOSAL_ATTEMPTS
+    solver_model: str = EXPERIMENT_SOLVER_MODEL
+    solver_temperature: int = EXPERIMENT_SOLVER_TEMPERATURE
+    solver_top_p: int = EXPERIMENT_SOLVER_TOP_P
+    solver_seed: int = EXPERIMENT_SOLVER_SEED
+    solver_n: int = EXPERIMENT_SOLVER_N
+    solver_stream: bool = EXPERIMENT_SOLVER_STREAM
+    solver_max_tokens: int = EXPERIMENT_SOLVER_MAX_TOKENS
 
     def __post_init__(self) -> None:
         for field, expected in self._canonical_values().items():
             actual = getattr(self, field)
             if type(actual) is not type(expected) or actual != expected:
                 raise MetaHarnessConfigError(
-                    f"full-search V3 {field} is locked to {expected!r}"
+                    f"meta-harness {field} is locked to {expected!r}"
                 )
 
     @staticmethod
     def _canonical_values() -> dict[str, Any]:
         return {
-            "protocol_id": FULL_SEARCH_V3_PROTOCOL_ID,
-            "search_size": FULL_SEARCH_V3_SEARCH_SIZE,
-            "final_size": FULL_SEARCH_V3_FINAL_SIZE,
-            "split_seed": FULL_SEARCH_V3_SPLIT_SEED,
-            "candidate_count_per_iteration": FULL_SEARCH_V3_CANDIDATES_PER_ITERATION,
-            "min_iterations": FULL_SEARCH_V3_MIN_ITERATIONS,
-            "max_iterations": FULL_SEARCH_V3_MAX_ITERATIONS,
-            "patience": FULL_SEARCH_V3_PATIENCE,
-            "proposal_attempts": FULL_SEARCH_V3_PROPOSAL_ATTEMPTS,
-            "solver_model": FULL_SEARCH_V3_SOLVER_MODEL,
-            "solver_temperature": FULL_SEARCH_V3_SOLVER_TEMPERATURE,
-            "solver_top_p": FULL_SEARCH_V3_SOLVER_TOP_P,
-            "solver_seed": FULL_SEARCH_V3_SOLVER_SEED,
-            "solver_n": FULL_SEARCH_V3_SOLVER_N,
-            "solver_stream": FULL_SEARCH_V3_SOLVER_STREAM,
-            "solver_max_tokens": FULL_SEARCH_V3_SOLVER_MAX_TOKENS,
+            "protocol_id": EXPERIMENT_PROTOCOL_ID,
+            "search_size": EXPERIMENT_SEARCH_SIZE,
+            "final_size": EXPERIMENT_FINAL_SIZE,
+            "split_seed": EXPERIMENT_SPLIT_SEED,
+            "candidate_count_per_iteration": EXPERIMENT_CANDIDATES_PER_ITERATION,
+            "min_iterations": EXPERIMENT_MIN_ITERATIONS,
+            "max_iterations": EXPERIMENT_MAX_ITERATIONS,
+            "patience": EXPERIMENT_PATIENCE,
+            "proposal_attempts": EXPERIMENT_PROPOSAL_ATTEMPTS,
+            "solver_model": EXPERIMENT_SOLVER_MODEL,
+            "solver_temperature": EXPERIMENT_SOLVER_TEMPERATURE,
+            "solver_top_p": EXPERIMENT_SOLVER_TOP_P,
+            "solver_seed": EXPERIMENT_SOLVER_SEED,
+            "solver_n": EXPERIMENT_SOLVER_N,
+            "solver_stream": EXPERIMENT_SOLVER_STREAM,
+            "solver_max_tokens": EXPERIMENT_SOLVER_MAX_TOKENS,
         }
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any]) -> "FullSearchV3Config":
-        """Validate one complete V3 configuration object without defaults."""
+    def from_mapping(cls, values: Mapping[str, Any]) -> "Config":
+        """Validate one complete configuration object without defaults."""
 
         if not isinstance(values, Mapping):
-            raise MetaHarnessConfigError("full-search V3 configuration must be an object")
+            raise MetaHarnessConfigError("meta-harness configuration must be an object")
         _require_exact_fields(
             values,
             {
@@ -121,15 +121,15 @@ class FullSearchV3Config:
                 "proposal_attempts",
                 "solver",
             },
-            "full-search V3 configuration",
+            "meta-harness configuration",
         )
         solver = values["solver"]
         if not isinstance(solver, Mapping):
-            raise MetaHarnessConfigError("full-search V3 solver must be an object")
+            raise MetaHarnessConfigError("meta-harness solver must be an object")
         _require_exact_fields(
             solver,
             {"model", "temperature", "top_p", "seed", "n", "stream", "max_tokens"},
-            "full-search V3 solver",
+            "meta-harness solver",
         )
         return cls(
             protocol_id=values["protocol_id"],
@@ -151,26 +151,26 @@ class FullSearchV3Config:
         )
 
     @classmethod
-    def from_json(cls, serialized: str) -> "FullSearchV3Config":
+    def from_json(cls, serialized: str) -> "Config":
         if not isinstance(serialized, str):
             raise MetaHarnessConfigError(
-                "full-search V3 serialized configuration must be text"
+                "meta-harness serialized configuration must be text"
             )
         try:
             values = json.loads(serialized, object_pairs_hook=_unique_json_object)
         except (json.JSONDecodeError, MetaHarnessConfigError) as exc:
             raise MetaHarnessConfigError(
-                "full-search V3 configuration must contain valid JSON"
+                "meta-harness configuration must contain valid JSON"
             ) from exc
         return cls.from_mapping(values)
 
     @classmethod
-    def load(cls, path: str | Path) -> "FullSearchV3Config":
+    def load(cls, path: str | Path) -> "Config":
         try:
             serialized = Path(path).read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
             raise MetaHarnessConfigError(
-                "full-search V3 configuration file must be readable UTF-8 text"
+                "meta-harness configuration file must be readable UTF-8 text"
             ) from exc
         return cls.from_json(serialized)
 
@@ -207,16 +207,16 @@ class FullSearchV3Config:
         return hashlib.sha256(encoded).hexdigest()
 
 
-def canonical_full_search_v3_config() -> FullSearchV3Config:
+def canonical_experiment_config() -> Config:
     """Return the only permitted ``sciver_full_search_v3`` configuration."""
 
-    return FullSearchV3Config()
+    return Config()
 
 
-def load_full_search_v3_config(path: str | Path) -> FullSearchV3Config:
-    """Load and validate the complete locked V3 configuration."""
+def load_experiment_config(path: str | Path) -> Config:
+    """Load and validate the complete locked configuration."""
 
-    return FullSearchV3Config.load(path)
+    return Config.load(path)
 
 
 def _require_exact_fields(
@@ -232,7 +232,7 @@ def _require_exact_fields(
         if unexpected:
             details.append(f"unexpected: {', '.join(unexpected)}")
         raise MetaHarnessConfigError(
-            f"{context} fields must exactly match the V3 contract "
+            f"{context} fields must exactly match the contract "
             f"({'; '.join(details)})"
         )
 
@@ -249,26 +249,26 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 __all__ = [
     "DEFAULT_PROPOSER_MODEL",
     "DEFAULT_PROPOSER_REASONING_EFFORT",
-    "FULL_SEARCH_V3_CANDIDATES_PER_ITERATION",
-    "FULL_SEARCH_V3_FINAL_SIZE",
-    "FULL_SEARCH_V3_MAX_ITERATIONS",
-    "FULL_SEARCH_V3_MIN_ITERATIONS",
-    "FULL_SEARCH_V3_PATIENCE",
-    "FULL_SEARCH_V3_PROPOSAL_ATTEMPTS",
-    "FULL_SEARCH_V3_PROTOCOL_ID",
-    "FULL_SEARCH_V3_SEARCH_SIZE",
-    "FULL_SEARCH_V3_SOLVER_MAX_TOKENS",
-    "FULL_SEARCH_V3_SOLVER_MODEL",
-    "FULL_SEARCH_V3_SOLVER_N",
-    "FULL_SEARCH_V3_SOLVER_SEED",
-    "FULL_SEARCH_V3_SOLVER_STREAM",
-    "FULL_SEARCH_V3_SOLVER_TEMPERATURE",
-    "FULL_SEARCH_V3_SOLVER_TOP_P",
-    "FULL_SEARCH_V3_SPLIT_SEED",
-    "FullSearchV3Config",
+    "EXPERIMENT_CANDIDATES_PER_ITERATION",
+    "EXPERIMENT_FINAL_SIZE",
+    "EXPERIMENT_MAX_ITERATIONS",
+    "EXPERIMENT_MIN_ITERATIONS",
+    "EXPERIMENT_PATIENCE",
+    "EXPERIMENT_PROPOSAL_ATTEMPTS",
+    "EXPERIMENT_PROTOCOL_ID",
+    "EXPERIMENT_SEARCH_SIZE",
+    "EXPERIMENT_SOLVER_MAX_TOKENS",
+    "EXPERIMENT_SOLVER_MODEL",
+    "EXPERIMENT_SOLVER_N",
+    "EXPERIMENT_SOLVER_SEED",
+    "EXPERIMENT_SOLVER_STREAM",
+    "EXPERIMENT_SOLVER_TEMPERATURE",
+    "EXPERIMENT_SOLVER_TOP_P",
+    "EXPERIMENT_SPLIT_SEED",
+    "Config",
     "MetaHarnessConfigError",
     "SUPPORTED_PROPOSER_MODELS",
     "SUPPORTED_REASONING_EFFORTS",
-    "canonical_full_search_v3_config",
-    "load_full_search_v3_config",
+    "canonical_experiment_config",
+    "load_experiment_config",
 ]

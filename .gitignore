@@ -5,6 +5,10 @@ __pycache__/
 .env
 .env.*
 
+# Local agent-planning artifacts; repository-owned Meta-Harness skills remain tracked.
+docs/superpowers/
+.codex/
+
 # Local Meta-Harness datasets, search state, traces, and final-test artifacts.
 workspace/meta_harness/
 .venv/

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "full_search_v3_candidate.schema.json",
+  "title": "Full SEARCH candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "iteration",
+    "candidate"
+  ],
+  "properties": {
+    "iteration": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "candidate": {
+      "$ref": "#/$defs/candidate"
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "parent_id",
+        "hypothesis",
+        "expected_tradeoff",
+        "templates"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "parent_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "hypothesis": {
+          "type": "string",
+          "minLength": 12
+        },
+        "expected_tradeoff": {
+          "type": "string",
+          "minLength": 1
+        },
+        "templates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "direct",
+            "analytical",
+            "parallel",
+            "sequential"
+          ],
+          "properties": {
+            "direct": {"type": "string", "minLength": 1, "maxLength": 12000},
+            "analytical": {"type": "string", "minLength": 1, "maxLength": 12000},
+            "parallel": {"type": "string", "minLength": 1, "maxLength": 12000},
+            "sequential": {"type": "string", "minLength": 1, "maxLength": 12000}
+          }
+        }
+      }
+    }
+  }
+}
