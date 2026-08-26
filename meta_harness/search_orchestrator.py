@@ -13,6 +13,8 @@ import re
 import tempfile
 from typing import Any, Iterator
 
+from tqdm.auto import tqdm
+
 from meta_harness.config import (
     EXPERIMENT_MAX_ITERATIONS,
     EXPERIMENT_MIN_ITERATIONS,
@@ -154,38 +156,51 @@ class Orchestrator:
             self._state = self._load_or_initialize_state()
             if self._state["status"] in _TERMINAL_STATUSES:
                 return _copy_json(self._state)
-            if not self._ensure_p0():
-                return _copy_json(self._state)
-            while self._state["status"] == "running":
-                unfinished = next(
-                    (
-                        entry
-                        for entry in self._state["iterations"]
-                        if entry["status"] != "complete"
-                    ),
-                    None,
-                )
-                if unfinished is not None:
-                    if not self._advance_iteration(unfinished["iteration"]):
+            _progress = tqdm(
+                total=EXPERIMENT_MAX_ITERATIONS,
+                initial=_completed_iterations(self._state),
+                desc="SEARCH candidate iterations",
+                unit="iter",
+                leave=True,
+                dynamic_ncols=True,
+            )
+            try:
+                if not self._ensure_p0():
+                    return _copy_json(self._state)
+                while self._state["status"] == "running":
+                    unfinished = next(
+                        (
+                            entry
+                            for entry in self._state["iterations"]
+                            if entry["status"] != "complete"
+                        ),
+                        None,
+                    )
+                    if unfinished is not None:
+                        if not self._advance_iteration(unfinished["iteration"]):
+                            break
+                        _sync_iteration_progress(_progress, self._state)
+                        continue
+                    completed = len(self._state["iterations"])
+                    if completed >= EXPERIMENT_MAX_ITERATIONS:
+                        self._state["status"] = "max_stopped"
+                        self._state["stop_reason"] = "maximum_completed_iterations"
+                        self._persist("max_stopped")
                         break
-                    continue
-                completed = len(self._state["iterations"])
-                if completed >= EXPERIMENT_MAX_ITERATIONS:
-                    self._state["status"] = "max_stopped"
-                    self._state["stop_reason"] = "maximum_completed_iterations"
-                    self._persist("max_stopped")
-                    break
-                if (
-                    completed >= EXPERIMENT_MIN_ITERATIONS
-                    and self._state["patience"]["consecutive_non_improving"]
-                    >= EXPERIMENT_PATIENCE
-                ):
-                    self._state["status"] = "patience_stopped"
-                    self._state["stop_reason"] = "metric_patience"
-                    self._persist("patience_stopped")
-                    break
-                if not self._advance_iteration(completed + 1):
-                    break
+                    if (
+                        completed >= EXPERIMENT_MIN_ITERATIONS
+                        and self._state["patience"]["consecutive_non_improving"]
+                        >= EXPERIMENT_PATIENCE
+                    ):
+                        self._state["status"] = "patience_stopped"
+                        self._state["stop_reason"] = "metric_patience"
+                        self._persist("patience_stopped")
+                        break
+                    if not self._advance_iteration(completed + 1):
+                        break
+                    _sync_iteration_progress(_progress, self._state)
+            finally:
+                _progress.close()
             return _copy_json(self._state)
 
     def state(self) -> dict[str, Any]:
@@ -566,6 +581,17 @@ def _iteration_entry(state: Mapping[str, Any], iteration: int) -> dict[str, Any]
         if entry["iteration"] == iteration:
             return entry
     return None
+
+
+def _completed_iterations(state: Mapping[str, Any]) -> int:
+    return sum(
+        1 for entry in state["iterations"] if entry["status"] == "complete"
+    )
+
+
+def _sync_iteration_progress(bar: Any, state: Mapping[str, Any]) -> None:
+    bar.n = _completed_iterations(state)
+    bar.refresh()
 
 
 def _patience_dict(state: PatienceState) -> dict[str, Any]:
