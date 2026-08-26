@@ -13,9 +13,11 @@ import pytest
 from meta_harness.solver import (
     SolverError,
     LiveSolverDisabledError,
+    SOLVER_MAX_TOKENS_OVERRIDE_ENV,
     SolverResult,
     build_solver_request,
     create_live_solver_client,
+    effective_solver_max_tokens,
     execute_solver_request,
     preflight_live_solver_model_list,
 )
@@ -276,3 +278,34 @@ with patch.object(
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_max_tokens_override_is_applied_to_built_request(tmp_path, monkeypatch):
+    from meta_harness.config import canonical_experiment_config
+
+    record, _first, _second = _paired_record(tmp_path)
+    monkeypatch.setenv(SOLVER_MAX_TOKENS_OVERRIDE_ENV, "16384")
+    request = build_solver_request(record, COT_PROMPT)
+    assert request.generation.max_tokens == 16384
+    assert request.generation.as_request_options()["max_tokens"] == 16384
+
+
+def test_max_tokens_override_defaults_when_unset(tmp_path, monkeypatch):
+    from meta_harness.config import canonical_experiment_config
+
+    monkeypatch.delenv(SOLVER_MAX_TOKENS_OVERRIDE_ENV, raising=False)
+    record, _first, _second = _paired_record(tmp_path)
+    request = build_solver_request(record, COT_PROMPT)
+    assert request.generation.max_tokens == 8192
+
+
+def test_max_tokens_override_rejects_invalid_environment(monkeypatch):
+    from meta_harness.config import canonical_experiment_config
+
+    config = canonical_experiment_config()
+    for bad in ("0", "-5", "abc"):
+        monkeypatch.setenv(SOLVER_MAX_TOKENS_OVERRIDE_ENV, bad)
+        with pytest.raises(SolverError, match="positive integer"):
+            effective_solver_max_tokens(config)
+    monkeypatch.delenv(SOLVER_MAX_TOKENS_OVERRIDE_ENV, raising=False)
+    assert effective_solver_max_tokens(config) == 8192

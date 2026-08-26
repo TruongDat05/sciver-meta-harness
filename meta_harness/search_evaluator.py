@@ -454,6 +454,14 @@ def evaluate_experiment_candidate(
     outcomes: dict[str, PredictionOutcome] = {}
     failures: dict[str, SolverFailureMetadata] = {}
 
+    # Order every completion by its immutable manifest (request) position so
+    # the durable ordered snapshot can be assembled once per write without
+    # re-scanning or copying the whole set on every sample.
+    position_of = {item["sample_id"]: index for index, item in enumerate(requests)}
+    ordered_slots: list[dict[str, Any] | None] = [None] * len(requests)
+    for sample_id, entry in completed.items():
+        ordered_slots[position_of[sample_id]] = entry
+
     for item in requests:
         sample_id = item["sample_id"]
         request_identity = item["identity"]
@@ -485,7 +493,8 @@ def evaluate_experiment_candidate(
         outcome = PredictionOutcome.from_solver_result(sample_id, result)
         outcomes[sample_id] = outcome
         completed[sample_id] = _completed_entry(request_identity, outcome)
-        checkpoint["completed_samples"] = _ordered_completed_entries(completed, requests)
+        ordered_slots[position_of[sample_id]] = completed[sample_id]
+        checkpoint["completed_samples"] = _slot_completed_entries(ordered_slots)
         checkpoint["last_infrastructure_failures"] = _failure_entries(
             failures, requests
         )
@@ -856,10 +865,11 @@ def _completed_entry(identity: Any, outcome: PredictionOutcome) -> dict[str, Any
     }
 
 
-def _ordered_completed_entries(
-    completed: Mapping[str, Mapping[str, Any]], requests: Sequence[Mapping[str, Any]]
+def _slot_completed_entries(
+    ordered_slots: Sequence[Mapping[str, Any] | None],
 ) -> list[dict[str, Any]]:
-    return [dict(completed[item["sample_id"]]) for item in requests if item["sample_id"] in completed]
+    """Return completed entries in manifest order from position-indexed slots."""
+    return [entry for entry in ordered_slots if entry is not None]
 
 
 def _failure_entries(

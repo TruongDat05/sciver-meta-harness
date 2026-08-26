@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from string import Template
 from typing import Any, Protocol
 
@@ -31,6 +32,11 @@ EXPERIMENT_TRANSPORT_CONTRACT_VERSION = (
 EXPERIMENT_MODEL_LIST_PREFLIGHT_VERSION = (
     "sciver_full_search_v3_model_list_preflight_v1"
 )
+# Optional runtime override for the locked solver max_tokens. When unset the
+# immutable protocol value (8192) is used unchanged, so the default path and
+# existing tests stay identical. When set to a positive integer, that value is
+# used for every solver request built through the canonical request builder.
+SOLVER_MAX_TOKENS_OVERRIDE_ENV = "SCIVER_SOLVER_MAX_TOKENS"
 
 
 class SolverError(ValueError):
@@ -99,7 +105,7 @@ class SolverGenerationSettings:
             seed=config.solver_seed,
             n=config.solver_n,
             stream=config.solver_stream,
-            max_tokens=config.solver_max_tokens,
+            max_tokens=effective_solver_max_tokens(config),
         )
 
     def as_request_options(self) -> dict[str, Any]:
@@ -434,9 +440,42 @@ def _require_sha256(value: Any, field: str) -> None:
         )
 
 
+def effective_solver_max_tokens(
+    config: Config,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Return the solver ``max_tokens`` with an optional runtime override.
+
+    When :data:`SOLVER_MAX_TOKENS_OVERRIDE_ENV` is unset, the locked protocol
+    value from ``config.solver_max_tokens`` (8192) is used so default behavior
+    is unchanged. When set to a positive integer, that value is returned so an
+    operator can raise the cap (e.g. to avoid ``finish_reason='length'``
+    truncation) without editing the immutable configuration.
+    """
+    if not isinstance(config, Config):
+        raise SolverError("Meta-Harness solver requests require Config")
+    source = os.environ if environment is None else environment
+    raw = source.get(SOLVER_MAX_TOKENS_OVERRIDE_ENV)
+    if raw is None or str(raw).strip() == "":
+        return config.solver_max_tokens
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        raise SolverError(
+            f"{SOLVER_MAX_TOKENS_OVERRIDE_ENV} must be a positive integer"
+        ) from None
+    if isinstance(value, bool) or value <= 0:
+        raise SolverError(
+            f"{SOLVER_MAX_TOKENS_OVERRIDE_ENV} must be a positive integer"
+        )
+    return value
+
+
 __all__ = [
     "EXPERIMENT_MODEL_LIST_PREFLIGHT_VERSION",
     "EXPERIMENT_TRANSPORT_CONTRACT_VERSION",
+    "SOLVER_MAX_TOKENS_OVERRIDE_ENV",
     "SolverError",
     "LiveSolverDisabledError",
     "SOLVER_REQUEST_IDENTITY_SCHEMA_VERSION",
@@ -448,6 +487,7 @@ __all__ = [
     "build_solver_request",
     "build_solver_request_identity",
     "create_live_solver_client",
+    "effective_solver_max_tokens",
     "execute_solver_request",
     "preflight_live_solver_model_list",
     "solver_request_payload_sha256",

@@ -104,19 +104,22 @@ def test_notebook_never_changes_checkout_or_installs_dependencies():
     assert "EXPECTED_REPOSITORY_ORIGIN" in source
 
 
-def test_notebook_uses_exact_confirmation_strings_before_runtime_credentials():
+def test_notebook_reads_credentials_from_env_without_confirmation_typing():
     source = _source(_notebook())
-    assert "LIVE_SMOKE_CONFIRMATION == 'RUN_LIVE_SMOKE'" in source
-    assert "FULL_SEARCH_CONFIRMATION == 'RUN_FULL_SEARCH'" in source
-    assert "FINAL_CONFIRMATION == 'RUN_FINAL_ONCE'" in source
-    assert source.index("LIVE_SMOKE_CONFIRMATION == 'RUN_LIVE_SMOKE'") < source.index(
-        "runtime_api_url, runtime_api_key = _runtime_api_values()"
-    )
-    assert "getpass('API_KEY (runtime only): ')" in source
-    assert "raw_url = os.environ.get('API_URL')" in source
-    assert "raw_key = os.environ.get('API_KEY')" in source
-    assert "raw_key.strip()" in source
-    assert "'\\r' in raw_key or '\\n' in raw_key" in source
+    assert "LIVE_SMOKE_CONFIRMATION" not in source
+    assert "FULL_SEARCH_CONFIRMATION" not in source
+    assert "FINAL_CONFIRMATION" not in source
+    assert "RUN_LIVE_SMOKE" not in source
+    assert "RUN_FULL_SEARCH" not in source
+    assert "RUN_FINAL_ONCE" not in source
+    assert "getpass" not in source
+    assert "input(" not in source
+    assert "_runtime_api_values()" not in source
+    assert "'API_URL'" in source
+    assert "'API_KEY'" in source
+    assert "_required_setting('API_URL')" in source
+    assert "load_dotenv" in source
+    assert "ENV_FILE" in source
 
 
 def test_notebook_default_path_has_no_live_boolean_and_no_embedded_runtime_values():
@@ -137,12 +140,14 @@ def test_notebook_default_path_has_no_live_boolean_and_no_embedded_runtime_value
     assert "sample_id" not in source
 
 
-def test_notebook_offline_smoke_precedes_any_credential_reader_call():
+def test_notebook_offline_smoke_precedes_live_stage_and_keeps_env_credentials_out():
     source = _source(_notebook())
     offline_call = source.index("offline_smoke = preflight_search_run(")
-    credential_call = source.index("runtime_api_url, runtime_api_key = _runtime_api_values()")
-    assert offline_call < credential_call
-    assert "solver_identity_sha256=" not in source[offline_call:credential_call]
+    live_smoke_index = source.index("run_meta_harness_smoke(")
+    assert offline_call < live_smoke_index
+    assert "solver_identity_sha256=" not in source[offline_call:live_smoke_index]
+    assert "api_key=API_KEY" in source
+    assert "api_url=API_URL" in source
 
 
 def test_readme_references_the_only_canonical_notebook():

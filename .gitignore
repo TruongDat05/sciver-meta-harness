@@ -13,4 +13,5 @@ docs/superpowers/
 workspace/meta_harness/
 .venv/
 data/
-pipeline_meta_harness.mdpipeline_meta_harness.md
+pipeline_meta_harness.md
+opencode.json

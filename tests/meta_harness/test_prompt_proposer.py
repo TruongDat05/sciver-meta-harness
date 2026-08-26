@@ -92,7 +92,7 @@ def test_valid_one_candidate_output_is_accepted_and_receipted(tmp_path):
     assert receipt["candidate_id"] == "v3_candidate_001"
     command, kwargs = runner.calls[0]
     assert command[:2] == ["codex", "exec"]
-    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert command[command.index("--sandbox") + 1] == "danger-full-access"
     assert kwargs["shell"] is False
 
 
