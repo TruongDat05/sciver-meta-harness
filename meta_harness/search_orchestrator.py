@@ -13,7 +13,7 @@ import re
 import tempfile
 from typing import Any, Iterator
 
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from meta_harness.config import (
     EXPERIMENT_MAX_ITERATIONS,
