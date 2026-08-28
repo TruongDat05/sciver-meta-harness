@@ -26,7 +26,7 @@ from meta_harness.solver import (
 
 def _request() -> SolverRequest:
     return SolverRequest(
-        model="Qwen3.6-35B-A3B",
+        model="Qwen2.5-VL-7B-Instruct",
         messages=({"role": "user", "content": "safe request"},),
         generation=SolverGenerationSettings(
             temperature=0,
@@ -304,7 +304,7 @@ def test_complete_ordered_refills_bounded_workers_and_returns_manifest_order(tmp
 
     def request(content: str) -> SolverRequest:
         return SolverRequest(
-            model="Qwen3.6-35B-A3B",
+            model="Qwen2.5-VL-7B-Instruct",
             messages=({"role": "user", "content": content},),
             generation=_request().generation,
         )

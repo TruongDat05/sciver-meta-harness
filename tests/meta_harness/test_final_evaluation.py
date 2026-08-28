@@ -353,7 +353,7 @@ def test_final_execution_retries_and_persists_only_aggregate_metrics(final_input
     import meta_harness.final_evaluation as final_module
 
     request = SolverRequest(
-        model="Qwen3.6-35B-A3B",
+        model="Qwen2.5-VL-7B-Instruct",
         messages=({"role": "user", "content": "offline FINAL request"},),
         generation=SolverGenerationSettings.from_config(canonical_experiment_config()),
     )

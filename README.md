@@ -8,7 +8,7 @@ Meta-Harness selects exactly 2,000 SciVer samples with seed 42: 1,000 paper-disj
 
 SEARCH runs 15--40 completed candidate iterations, permits up to three invalid or duplicate proposal attempts per iteration, and stops after patience 8. Ranking is SEARCH Macro-F1 descending, SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID ascending. The SEARCH-only winner is frozen as additive `meta_cot`. A separately authorized FINAL stage evaluates frozen P0 and frozen P* once each on the identical 1,000 FINAL IDs; FINAL never changes SEARCH state, ranking, patience, or the frozen winner.
 
-The solver is fixed to `Qwen3.6-35B-A3B` with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming responses, and `max_tokens=8192`.
+The solver is fixed to `Qwen2.5-VL-7B-Instruct` with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming responses, and `max_tokens=8192`.
 
 ## Component map
 

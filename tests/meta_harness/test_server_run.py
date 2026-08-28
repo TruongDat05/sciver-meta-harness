@@ -137,9 +137,9 @@ def test_search_preflight_is_dry_run_and_never_constructs_clients(
     assert status["resume"] is False
     assert status["workload"]["maximum_search_logical_calls"] == 41000
     assert status["solver"]["identity_sha256"] == SOLVER_IDENTITY
-    assert status["solver"]["model"] == "Qwen3.6-35B-A3B"
+    assert status["solver"]["model"] == "Qwen2.5-VL-7B-Instruct"
     assert status["config_sha256"] == (
-        "7ce90e21d6dac359c2fb2fb3bdd22c670b7dba31185801ffe318fa6042d4aea4"
+        "2f1120f81f48b4c5dba837e2a6ca287c7a199bfaabdea65c1781e85fe04d542e"
     )
     assert set(status["checkpoints"]) == {
         "smoke_receipt_path",
@@ -328,7 +328,7 @@ def test_smoke_uses_one_search_p0_request_and_receipt_resume_is_idempotent(
 
     class FakeSolver:
         def list_model_ids(self):
-            return ("Qwen3.6-35B-A3B", "another-model")
+            return ("Qwen2.5-VL-7B-Instruct", "another-model")
 
         def complete(self, request):
             dispatched.append(request)

@@ -291,7 +291,7 @@ def test_previous_model_run_identity_is_not_resumable(tmp_path):
     state = orchestration.state()
 
     assert state["identity"]["config_sha256"] == (
-        "7ce90e21d6dac359c2fb2fb3bdd22c670b7dba31185801ffe318fa6042d4aea4"
+        "2f1120f81f48b4c5dba837e2a6ca287c7a199bfaabdea65c1781e85fe04d542e"
     )
     state["identity"]["config_sha256"] = (
         "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
