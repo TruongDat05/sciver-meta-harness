@@ -33,6 +33,12 @@ _DEFAULT_IMAGE_CACHE = (
     / "v1"
 )
 
+# Provider-neutral workaround for endpoints that accept only one image per
+# request.  When exactly "1", multiple evidence images are fused side-by-side
+# into a single image so the prompt still carries all evidence.  Off by
+# default so multi-image-capable providers keep the standard per-image format.
+FUSE_EVIDENCE_IMAGES_ENV = "SCIVER_FUSE_EVIDENCE_IMAGES"
+
 
 class EmptyImageError(ValueError):
     """Raised when an image file contains no data."""
@@ -183,6 +189,41 @@ def _build_image_url_block(data_uri: str) -> dict[str, object]:
     }
 
 
+def _fuse_evidence_images(
+    image_paths: Iterable[str | PathLike[str]],
+    *,
+    cache_dir: str | PathLike[str] | None = None,
+) -> str:
+    """Combine evidence images side-by-side into one JPEG data URI.
+
+    Order is preserved (first image left). This is the opt-in workaround for
+    endpoints that allow at most one image per prompt; it keeps every piece of
+    evidence visible in a single request image.
+    """
+
+    images = []
+    for path in image_paths:
+        data_uri = _image_to_data_uri(path, cache_dir=cache_dir)
+        encoded = data_uri.split(",", 1)[1]
+        with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+            image.load()
+            images.append(image.convert("RGB"))
+    target_height = max(image.height for image in images)
+    scaled = []
+    for image in images:
+        ratio = target_height / image.height
+        width = max(1, round(image.width * ratio))
+        scaled.append(image.resize((width, target_height), Image.BILINEAR))
+    canvas = Image.new("RGB", (sum(im.width for im in scaled), target_height), (255, 255, 255))
+    offset = 0
+    for image in scaled:
+        canvas.paste(image, (offset, 0))
+        offset += image.width
+    buffer = BytesIO()
+    canvas.save(buffer, format="JPEG", quality=92)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def build_remote_messages(
     user_prompt: str,
     image_paths: Iterable[str | PathLike[str]] = (),
@@ -195,12 +236,22 @@ def build_remote_messages(
     if system_prompt is not None:
         messages.append({"role": "system", "content": system_prompt})
 
-    user_content = [
-        _build_image_url_block(
-            _image_to_data_uri(image_path, cache_dir=image_cache_dir)
+    path_list = list(image_paths)
+    fuse = os.environ.get(FUSE_EVIDENCE_IMAGES_ENV) == "1"
+    user_content: list[dict[str, object]] = []
+    if fuse and len(path_list) > 1:
+        user_content.append(
+            _build_image_url_block(
+                _fuse_evidence_images(path_list, cache_dir=image_cache_dir)
+            )
         )
-        for image_path in image_paths
-    ]
+    else:
+        for image_path in path_list:
+            user_content.append(
+                _build_image_url_block(
+                    _image_to_data_uri(image_path, cache_dir=image_cache_dir)
+                )
+            )
     user_content.append({"type": "text", "text": user_prompt})
     messages.append({"role": "user", "content": user_content})
     return messages

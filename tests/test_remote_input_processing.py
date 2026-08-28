@@ -179,6 +179,53 @@ def test_multiple_images_are_supported(tmp_path):
     assert all(block["type"] == "image_url" for block in image_blocks)
 
 
+def test_fusion_flag_fuses_two_images_into_one(monkeypatch, tmp_path):
+    first = _write_image(tmp_path / "first.png", "PNG", "red")
+    second = _write_image(tmp_path / "second.jpg", "JPEG", "blue")
+    monkeypatch.setenv("SCIVER_FUSE_EVIDENCE_IMAGES", "1")
+
+    messages = build_remote_messages("Compare the figures.", [first, second])
+
+    content = messages[-1]["content"]
+    assert len(content) == 2  # one fused image + text
+    data_uri = _image_url(messages, 0)
+    assert data_uri.startswith("data:image/jpeg;base64,")
+    with Image.open(BytesIO(base64.b64decode(data_uri.split(",", 1)[1]))) as fused:
+        with Image.open(first) as a, Image.open(second) as b:
+            assert fused.width == a.width + b.width
+            assert fused.height == a.height == b.height
+
+
+def test_fusion_flag_single_image_is_unchanged(monkeypatch, tmp_path):
+    first = _write_image(tmp_path / "first.png", "PNG", "red")
+    monkeypatch.setenv("SCIVER_FUSE_EVIDENCE_IMAGES", "1")
+
+    messages = build_remote_messages("Inspect the figure.", [first])
+
+    content = messages[-1]["content"]
+    assert len(content) == 2  # one image + text
+    assert _image_url(messages, 0).startswith("data:image/png;base64,")
+
+
+def test_fusion_flag_off_by_default(tmp_path):
+    first = _write_image(tmp_path / "first.png", "PNG", "red")
+    second = _write_image(tmp_path / "second.png", "PNG", "blue")
+
+    messages = build_remote_messages("Compare the figures.", [first, second])
+
+    assert len(messages[-1]["content"]) == 3  # two images + text, unchanged
+
+
+def test_fusion_flag_non_one_is_ignored(monkeypatch, tmp_path):
+    first = _write_image(tmp_path / "first.png", "PNG", "red")
+    second = _write_image(tmp_path / "second.png", "PNG", "blue")
+    monkeypatch.setenv("SCIVER_FUSE_EVIDENCE_IMAGES", "0")
+
+    messages = build_remote_messages("Compare the figures.", [first, second])
+
+    assert len(messages[-1]["content"]) == 3
+
+
 def test_missing_image_has_clear_error(tmp_path):
     missing_path = tmp_path / "missing.png"
 

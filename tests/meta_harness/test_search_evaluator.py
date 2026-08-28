@@ -330,6 +330,7 @@ def test_raw_metrics_writer_is_private_and_forged_mapping_has_no_public_path(tmp
             "checkpoint_path",
             "result_path",
             "resume",
+            "progress_hook",
         },
         "evaluate_experiment_p0": {
             "search_input",
@@ -339,6 +340,7 @@ def test_raw_metrics_writer_is_private_and_forged_mapping_has_no_public_path(tmp
             "checkpoint_path",
             "result_path",
             "resume",
+            "progress_hook",
         },
     }
     assert all("search_input" in parameters for parameters in public_result_paths.values())
@@ -1096,6 +1098,7 @@ def test_experiment_offline_1000_record_integration(
     assert tuple(f"synthetic-{index:04d}" for index in candidate_a_indices) == expected_ids
     assert tuple(f"synthetic-{index:04d}" for index in candidate_b_indices) == expected_ids
 
+
     p0_result = (tmp_path / "p0-result.json").read_bytes()
     p0_checkpoint = partial_checkpoint.read_bytes()
     assert p0_result == _canonical_snapshot_bytes(json.loads(p0_result))
@@ -1105,6 +1108,105 @@ def test_experiment_offline_1000_record_integration(
         for forbidden in ("Answer: yes", "data:image", "Authorization", "API_KEY"):
             assert forbidden not in text
 
+def test_candidate_reports_live_progress_hook_for_every_completed_case(
+    tmp_path, monkeypatch
+):
+    """The evaluator drives a progress hook once per durably decided request."""
+
+    monkeypatch.setattr(
+        socket.socket,
+        "connect",
+        lambda *_args, **_kwargs: pytest.fail("offline progress test opened a socket"),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("offline progress test started a subprocess"),
+    )
+    search_input, image_paths = _synthetic_1000_search_artifact(tmp_path)
+    cache = SearchCache(tmp_path / "cache")
+    client = _IntegrationClient(
+        parse_failure_indices={41},
+        abstention_indices={42},
+        image_paths=image_paths,
+    )
+    calls = []
+    report = evaluate_experiment_candidate(
+        search_input=search_input,
+        candidate_id="candidate_progress",
+        prompt=_candidate_prompt("PROGRESS"),
+        solver_identity_sha256="4" * 64,
+        cache=cache,
+        executor=_integration_executor(cache, client, []),
+        checkpoint_path=tmp_path / "chk.json",
+        result_path=tmp_path / "res.json",
+        progress_hook=lambda completed, total, passed, failed: calls.append(
+            (completed, total, passed, failed)
+        ),
+    )
+
+    assert report["total_records"] == 1000
+    assert len(calls) == 1000
+    assert calls[-1][0] == 1000 and calls[-1][1] == 1000
+    assert calls[-1][2] + calls[-1][3] == 1000
+    assert calls[-1][2] == 998 and calls[-1][3] == 2
+    for previous, current in zip(calls, calls[1:]):
+        assert current[0] == previous[0] + 1
+
+
+def test_resumed_candidate_progress_hook_starts_from_durable_completed_count(
+    tmp_path, monkeypatch
+):
+    """A resumed evaluation reports live progress that includes completed cases."""
+
+    monkeypatch.setattr(
+        socket.socket,
+        "connect",
+        lambda *_args, **_kwargs: pytest.fail("offline resumed progress opened a socket"),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("offline resumed progress started a subprocess"),
+    )
+    search_input, image_paths = _synthetic_1000_search_artifact(tmp_path)
+    cache = SearchCache(tmp_path / "cache")
+    interrupted = _IntegrationClient(
+        interrupt_at=12, image_paths=image_paths
+    )
+    with pytest.raises(KeyboardInterrupt):
+        evaluate_experiment_candidate(
+            search_input=search_input,
+            candidate_id="candidate_resume",
+            prompt=_candidate_prompt("RESUME"),
+            solver_identity_sha256="4" * 64,
+            cache=cache,
+            executor=_integration_executor(cache, interrupted, []),
+            checkpoint_path=tmp_path / "chk.json",
+            result_path=tmp_path / "res.json",
+        )
+    checkpoint = json.loads((tmp_path / "chk.json").read_text(encoding="utf-8"))
+    resumed_count = len(checkpoint["completed_samples"])
+    assert resumed_count == 12
+
+    resumed = _IntegrationClient(image_paths=image_paths)
+    calls = []
+    evaluate_experiment_candidate(
+        search_input=search_input,
+        candidate_id="candidate_resume",
+        prompt=_candidate_prompt("RESUME"),
+        solver_identity_sha256="4" * 64,
+        cache=cache,
+        executor=_integration_executor(cache, resumed, []),
+        checkpoint_path=tmp_path / "chk.json",
+        result_path=tmp_path / "res.json",
+        resume=True,
+        progress_hook=lambda completed, total, passed, failed: calls.append(
+            (completed, total, passed, failed)
+        ),
+    )
+    assert calls and calls[0][0] == resumed_count + 1
+    assert calls[-1][0] == 1000
 
 def test_search_evaluator_has_no_legacy_stage_or_final_dependencies():
     """The dedicated evaluator must not import or call legacy execution paths."""

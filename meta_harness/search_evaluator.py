@@ -8,7 +8,7 @@ legacy split, or FINAL material.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -398,12 +398,17 @@ def evaluate_experiment_candidate(
     checkpoint_path: str | Path,
     result_path: str | Path,
     resume: bool = False,
+    progress_hook: Callable[[int, int, int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one prompt over the immutable full SEARCH membership.
 
     The cache is the durable completion store. The checkpoint contains only
     identity hashes and parser outcomes, never prompts, requests, responses,
     images, credentials, endpoints, or FINAL/legacy-stage material.
+
+    When ``progress_hook`` is supplied it is called once per durably decided
+    request with ``(completed, total, passed, failed)`` counts. It is purely
+    observational and never affects request order, retries, or persistence.
     """
 
     search_input = _require_complete_search_input(search_input)
@@ -454,6 +459,21 @@ def evaluate_experiment_candidate(
     outcomes: dict[str, PredictionOutcome] = {}
     failures: dict[str, SolverFailureMetadata] = {}
 
+    total_requests = len(requests)
+    passed_count = sum(
+        1
+        for entry in checkpoint["completed_samples"]
+        if entry.get("parse_status") == "parsed"
+    )
+    failed_count = len(checkpoint["completed_samples"]) - passed_count
+
+    def _report_progress() -> None:
+        if progress_hook is None:
+            return
+        progress_hook(
+            passed_count + failed_count, total_requests, passed_count, failed_count
+        )
+
     # Order every completion by its immutable manifest (request) position so
     # the durable ordered snapshot can be assembled once per write without
     # re-scanning or copying the whole set on every sample.
@@ -483,23 +503,31 @@ def evaluate_experiment_candidate(
         completion = next(pending_results)
         if isinstance(completion, SolverExecutionFailure):
             failures[sample_id] = completion.metadata
+            failed_count += 1
             checkpoint["last_infrastructure_failures"] = _failure_entries(
                 failures, requests
             )
             checkpoint["status"] = "incomplete"
             _write_checkpoint(checkpoint_destination, checkpoint)
+            _report_progress()
             continue
         result = completion
         outcome = PredictionOutcome.from_solver_result(sample_id, result)
         outcomes[sample_id] = outcome
-        completed[sample_id] = _completed_entry(request_identity, outcome)
-        ordered_slots[position_of[sample_id]] = completed[sample_id]
+        completed_entry = _completed_entry(request_identity, outcome)
+        if completed_entry["parse_status"] == "parsed":
+            passed_count += 1
+        else:
+            failed_count += 1
+        completed[sample_id] = completed_entry
+        ordered_slots[position_of[sample_id]] = completed_entry
         checkpoint["completed_samples"] = _slot_completed_entries(ordered_slots)
         checkpoint["last_infrastructure_failures"] = _failure_entries(
             failures, requests
         )
         checkpoint["status"] = "running"
         _write_checkpoint(checkpoint_destination, checkpoint)
+        _report_progress()
 
     ordered_outcomes = tuple(
         outcomes.get(item["sample_id"])
@@ -549,6 +577,7 @@ def evaluate_experiment_p0(
     checkpoint_path: str | Path,
     result_path: str | Path,
     resume: bool = False,
+    progress_hook: Callable[[int, int, int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Evaluate frozen canonical P0 without accepting caller prompt text.
 
@@ -568,6 +597,7 @@ def evaluate_experiment_p0(
         checkpoint_path=checkpoint_path,
         result_path=result_path,
         resume=resume,
+        progress_hook=progress_hook,
     )
     if report.get("prompt_sha256") != canonical_experiment_p0_prompt_sha256():
         raise EvaluatorInputError(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -32,6 +33,11 @@ from meta_harness.server_run import (
     start_or_resume_server_run_final,
     start_or_resume_search_run,
 )
+
+from meta_harness.final_evaluation import FinalError
+from meta_harness.preparation import PreparationError
+from meta_harness.run_identity import EXPERIMENT_RUN_ID_PATTERN
+from meta_harness.winner_freeze import FreezeError
 
 
 _SENSITIVE_KEY = re.compile(
@@ -144,7 +150,7 @@ def cli(
     except Exception:
         output("error: server operation failed; inspect the local sanitized status and retry")
         return 1
-    output(json.dumps(_sanitize_value(result), sort_keys=True, separators=(",", ":")))
+    output(operator_render(result))
     return 0
 
 
@@ -239,6 +245,93 @@ def _sanitize_value(value: Any, *, inherited_sensitive: bool = False) -> Any:
 
 def _sanitize_text(value: str) -> str:
     return _BASE64.sub("<redacted>", _URL.sub("<redacted>", value))
+
+
+OFFICIAL_RUN_ID = "official_v3"
+DEFAULT_DATASET_RELATIVE = Path("data/sciver/testset.json")
+
+
+def operator_render(result: Any) -> str:
+    """Return a sanitized structured status for an operator result."""
+    return json.dumps(_sanitize_value(result), sort_keys=True, separators=(",", ":"))
+
+
+def operator_run(
+    dispatch: Callable[[], Any],
+    *,
+    output: Callable[[str], None] = print,
+) -> int:
+    """Execute a trusted operator dispatch and render a sanitized result.
+
+    This is the single exit-code/error-render seam that the root launchers
+    share with the canonical CLI.  ``output`` receives exactly one sanitized
+    line.
+    """
+    try:
+        result = dispatch()
+    except (ServerError, PreparationError, FinalError, FreezeError) as exc:
+        output(f"error: {_sanitize_text(str(exc))}")
+        return 2
+    except Exception:
+        output("error: server operation failed; inspect the local sanitized status and retry")
+        return 1
+    output(operator_render(result))
+    return 0
+
+
+def resolve_operator_run_id(
+    override: str | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the shared operator run identity (override > env > default)."""
+    source = os.environ if env is None else env
+    value = override or source.get("SCIVER_RUN_ID") or OFFICIAL_RUN_ID
+    if not isinstance(value, str) or not EXPERIMENT_RUN_ID_PATTERN.fullmatch(value):
+        raise ServerError("SCIVER_RUN_ID must be a safe operator run identifier")
+    return value
+
+
+def resolve_operator_dataset(
+    repository_root: str | Path,
+    override: str | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve the dataset path (override > env > repository default) and validate it."""
+    source = os.environ if env is None else env
+    value = override or source.get("SCIVER_DATASET_PATH")
+    candidate = (
+        Path(value)
+        if value
+        else Path(repository_root) / DEFAULT_DATASET_RELATIVE
+    )
+    path = Path(candidate).expanduser()
+    if not path.is_file():
+        raise ServerError(
+            f"dataset not found at {path}; pass --dataset-path or set SCIVER_DATASET_PATH"
+        )
+    return path.resolve()
+
+
+def operator_preparation_paths(
+    repository_root: str | Path,
+    run_id: str,
+) -> dict[str, Any]:
+    """Derive the trusted repository preparation layout for one run."""
+    run_root = (
+        Path(repository_root) / "workspace" / "meta_harness" / "full_search_v3" / run_id
+    )
+    preparation = run_root / "preparation"
+    return {
+        "repository_root": Path(repository_root).resolve(),
+        "run_id": run_id,
+        "run_root": run_root,
+        "preparation_root": preparation,
+        "search_safe_manifest": preparation / "search" / "search_safe_manifest.json",
+        "search_records": preparation / "search" / "search_records.json",
+        "private_manifest": preparation / "private" / "private_split_manifest.json",
+    }
 
 
 if __name__ == "__main__":

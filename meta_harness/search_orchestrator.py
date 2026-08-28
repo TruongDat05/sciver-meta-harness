@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -148,6 +149,27 @@ class Orchestrator:
             proposer_identity=proposer_identity,
         )
         self._state: dict[str, Any] = {}
+        self._progress: Any = None
+        self._live_label: str | None = None
+
+    @staticmethod
+    def _supports_progress_hook(evaluator: Any) -> bool:
+        try:
+            return "progress_hook" in inspect.signature(evaluator).parameters
+        except (TypeError, ValueError):
+            return False
+
+    def _progress_hook(self, completed: int, total: int, passed: int, failed: int) -> None:
+        """Render live per-request SEARCH stats for the current iteration."""
+        bar = self._progress
+        if bar is None or self._live_label is None:
+            return
+        bar.set_postfix(
+            iteration=self._live_label,
+            cases=f"{completed}/{total}",
+            passed=passed,
+            failed=failed,
+        )
 
     def run(self) -> dict[str, Any]:
         """Advance until a durable terminal state or retryable interruption."""
@@ -164,6 +186,7 @@ class Orchestrator:
                 leave=True,
                 dynamic_ncols=True,
             )
+            self._progress = _progress
             try:
                 if not self._ensure_p0():
                     return _copy_json(self._state)
@@ -221,8 +244,9 @@ class Orchestrator:
         resume = p0["status"] != "pending"
         p0["status"] = "evaluating"
         self._persist("p0_evaluating")
+        self._live_label = "P0"
         try:
-            report = self.p0_evaluator(
+            p0_kwargs: dict[str, Any] = dict(
                 search_input=self.search_input,
                 solver_identity_sha256=self.solver_identity_sha256,
                 cache=self.cache,
@@ -231,6 +255,9 @@ class Orchestrator:
                 result_path=self.run_directory / "evaluations" / "cot.metrics.json",
                 resume=resume,
             )
+            if self._supports_progress_hook(self.p0_evaluator):
+                p0_kwargs["progress_hook"] = self._progress_hook
+            report = self.p0_evaluator(**p0_kwargs)
         except EvaluationIncomplete:
             p0["status"] = "incomplete"
             self._persist("p0_incomplete")
@@ -283,8 +310,9 @@ class Orchestrator:
             entry["status"] = "evaluating"
             self._persist("candidate_evaluating")
             candidate = _candidate_from_state(entry["candidate"])
+            self._live_label = f"{iteration}/{EXPERIMENT_MAX_ITERATIONS}"
             try:
-                report = self.candidate_evaluator(
+                eval_kwargs: dict[str, Any] = dict(
                     search_input=self.search_input,
                     candidate_id=candidate.candidate_id,
                     prompt=candidate.templates,
@@ -303,6 +331,9 @@ class Orchestrator:
                     ),
                     resume=resume,
                 )
+                if self._supports_progress_hook(self.candidate_evaluator):
+                    eval_kwargs["progress_hook"] = self._progress_hook
+                report = self.candidate_evaluator(**eval_kwargs)
             except EvaluationIncomplete:
                 entry["status"] = "incomplete"
                 self._persist("candidate_incomplete")

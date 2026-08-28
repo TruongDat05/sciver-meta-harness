@@ -17,7 +17,9 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
+from tqdm import tqdm
 from typing import Any
 
 from meta_harness.config import (
@@ -360,33 +362,16 @@ def execute_final_evaluation(
                 raise FinalIdentityError(
                     "legacy FINAL state cannot resume without aggregate outcomes"
                 )
-            for index in range(len(completed_hashes), len(expected_hashes)):
-                request = build_solver_request(final_records[index], prompts[prompt_variant])
-                try:
-                    result = execute_solver_request_with_retry(
-                        solver, request, policy=active_retry_policy
-                    )
-                    parsed = parse_answer(result.content)
-                    prediction = (
-                        parsed["prediction"]
-                        if parsed["parse_status"] == "parsed"
-                        else None
-                    )
-                    infrastructure_failure = False
-                except SolverExecutionFailure:
-                    prediction = None
-                    infrastructure_failure = True
-                _account_final_outcome(
-                    variant["outcomes"],
-                    gold_label=final_records[index].get("gold_label"),
-                    prediction=prediction,
-                    infrastructure_failure=infrastructure_failure,
-                )
-                variant["metrics"] = _metrics_from_final_accounting(variant["outcomes"])
-                completed_hashes.append(expected_hashes[index])
-                state["status"] = "running"
-                _refresh_state_hash(state)
-                _atomic_replace_json(destination, state)
+            _complete_final_variant(
+                variant=variant,
+                expected_hashes=expected_hashes,
+                records=final_records,
+                prompt=prompts[prompt_variant],
+                solver=solver,
+                retry_policy=active_retry_policy,
+                state=state,
+                destination=destination,
+            )
         state["status"] = "complete"
         _refresh_state_hash(state)
         _atomic_replace_json(destination, state)
@@ -641,6 +626,87 @@ def _planned_state(identity: Mapping[str, Any]) -> dict[str, Any]:
         ],
     }
     return {**payload, "state_sha256": _sha256_json(payload)}
+
+
+def _final_progress_bar(prompt_variant: str, *, total: int, initial: int) -> Any:
+    """Build a stderr-bound progress bar for one validated FINAL prompt variant."""
+    if prompt_variant not in {"cot", "meta_cot"}:
+        raise FinalError("FINAL prompt variant is invalid")
+    return tqdm(
+        total=total,
+        initial=initial,
+        desc=f"FINAL {prompt_variant}",
+        unit="req",
+        leave=False,
+        dynamic_ncols=True,
+        file=sys.stderr,
+    )
+
+
+def _complete_final_variant(
+    *,
+    variant: dict[str, Any],
+    expected_hashes: Sequence[str],
+    records: Sequence[Mapping[str, Any]],
+    prompt: Mapping[str, Any],
+    solver: SolverClient,
+    retry_policy: SolverRetryPolicy,
+    state: dict[str, Any],
+    destination: Path,
+) -> None:
+    """Complete one paired FINAL variant, reporting one step per durable call.
+
+    The loop body is identical to the original inline dispatch: same order,
+    same accounting, same hash/status mutation, same atomic checkpoint.  The
+    only additions are the progress bar, created at the variant's durable
+    ``initial`` count, updated once per successful atomic replacement, and
+    closed in ``finally`` on success, exception, or interruption.
+    """
+
+    completed_hashes = variant["completed_request_sha256"]
+    progress = _final_progress_bar(
+        variant["prompt_variant"],
+        total=len(expected_hashes),
+        initial=len(completed_hashes),
+    )
+    try:
+        for index in range(len(completed_hashes), len(expected_hashes)):
+            request = build_solver_request(records[index], prompt)
+            try:
+                result = execute_solver_request_with_retry(
+                    solver, request, policy=retry_policy
+                )
+                parsed = parse_answer(result.content)
+                prediction = (
+                    parsed["prediction"]
+                    if parsed["parse_status"] == "parsed"
+                    else None
+                )
+                infrastructure_failure = False
+            except SolverExecutionFailure:
+                prediction = None
+                infrastructure_failure = True
+            _account_final_outcome(
+                variant["outcomes"],
+                gold_label=records[index].get("gold_label"),
+                prediction=prediction,
+                infrastructure_failure=infrastructure_failure,
+            )
+            variant["metrics"] = _metrics_from_final_accounting(variant["outcomes"])
+            completed_hashes.append(expected_hashes[index])
+            state["status"] = "running"
+            _refresh_state_hash(state)
+            _atomic_replace_json(destination, state)
+            progress.update(1)
+            progress.set_postfix(
+                passed=variant["outcomes"]["parsed_predictions"],
+                failed=(
+                    variant["outcomes"]["abstentions_or_parse_failures"]
+                    + variant["outcomes"]["infrastructure_failures"]
+                ),
+            )
+    finally:
+        progress.close()
 
 
 def _migrate_zero_completion_legacy_state(state: dict[str, Any]) -> bool:

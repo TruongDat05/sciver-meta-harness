@@ -398,6 +398,46 @@ def test_final_execution_retries_and_persists_only_aggregate_metrics(final_input
     )
 
 
+def test_completed_receipt_returns_without_creating_progress_bars(final_inputs, monkeypatch):
+    import meta_harness.final_evaluation as final_module
+    from meta_harness.solver import SolverRequest, SolverResult
+
+    request = SolverRequest(
+        model=canonical_experiment_config().solver_model,
+        messages=({"role": "user", "content": "offline FINAL request"},),
+        generation=SolverGenerationSettings.from_config(canonical_experiment_config()),
+    )
+    monkeypatch.setattr(final_module, "build_solver_request", lambda *_a, **_k: request)
+
+    class _OkSolver:
+        def complete(self, _request):
+            return SolverResult(content="Answer: yes")
+
+    def run():
+        return execute_final_evaluation(
+            repository_root=final_inputs["root"],
+            run_id=RUN_ID,
+            frozen_winner_path=None,
+            private_manifest_path=final_inputs["private_path"],
+            search_safe_manifest_path=final_inputs["safe_path"],
+            final_records=final_inputs["records"],
+            solver_contract=final_inputs["contract"],
+            solver=_OkSolver(),
+            authorize_final_execution=True,
+        )
+
+    done = run()
+    assert done["status"] == "complete"
+
+    calls = []
+    monkeypatch.setattr(
+        final_module, "_complete_final_variant", lambda **kwargs: calls.append(kwargs)
+    )
+    again = run()
+    assert again["status"] == "complete"
+    assert calls == []
+
+
 def test_preflight_rejects_missing_freeze(final_inputs):
     with pytest.raises(FinalError, match="frozen winner"):
         _preflight(final_inputs, frozen_winner_path=final_inputs["root"] / "missing.json")
