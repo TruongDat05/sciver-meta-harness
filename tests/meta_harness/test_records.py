@@ -50,7 +50,7 @@ def test_canonical_v3_configuration_is_complete_and_locked():
         "patience": 8,
         "proposal_attempts": 3,
         "solver": {
-            "model": "Qwen2.5-VL-7B-Instruct",
+            "model": "gemma-4-26B-A4B-it",
             "temperature": 0,
             "top_p": 1,
             "seed": 42,
@@ -77,7 +77,7 @@ def test_previous_solver_model_is_not_resume_compatible():
     with pytest.raises(MetaHarnessConfigError, match="solver_model is locked"):
         Config.from_mapping(values)
 
-    assert current_identity == "2f1120f81f48b4c5dba837e2a6ca287c7a199bfaabdea65c1781e85fe04d542e"
+    assert current_identity == "4ee121a12322871b2c95cec571a1a29142ea99b7f3ab3085a077fe27e4593c4b"
     assert current_identity != "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
 
 

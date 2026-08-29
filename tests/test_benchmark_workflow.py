@@ -102,7 +102,7 @@ def test_manifest_is_credential_free_and_rejects_configuration_changes(tmp_path)
         dataset_name="SciVer",
         dataset_path=dataset_path,
         summary=summary,
-        model_name="Qwen2.5-VL-7B-Instruct",
+        model_name="gemma-4-26B-A4B-it",
         method="cot",
         experiment_id="test",
         request_delay=0.0,
@@ -126,7 +126,7 @@ def _result_record(gold_label):
     return {
         "run_id": "run",
         "dataset": "SciClaimEval",
-        "model": "Qwen2.5-VL-7B-Instruct",
+        "model": "gemma-4-26B-A4B-it",
         "method": "direct",
         "sample_id": "sample",
         "prediction": "yes",

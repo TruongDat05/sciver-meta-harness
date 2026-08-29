@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -9,6 +10,7 @@ from types import MappingProxyType
 
 import pytest
 
+from meta_harness import prompt_proposer as pp
 from meta_harness.config import EXPERIMENT_PROTOCOL_ID, EXPERIMENT_SEARCH_SIZE
 from meta_harness.search_evaluator import (
     EXPERIMENT_P0_CANDIDATE_ID,
@@ -24,6 +26,7 @@ from meta_harness.prompt_proposer import (
     ProposalExhausted,
     ProposalResult,
     Proposer,
+    build_prompt_proposer_input,
 )
 from meta_harness.prompt_family import (
     canonical_baseline_sources,
@@ -291,7 +294,7 @@ def test_previous_model_run_identity_is_not_resumable(tmp_path):
     state = orchestration.state()
 
     assert state["identity"]["config_sha256"] == (
-        "2f1120f81f48b4c5dba837e2a6ca287c7a199bfaabdea65c1781e85fe04d542e"
+        "4ee121a12322871b2c95cec571a1a29142ea99b7f3ab3085a077fe27e4593c4b"
     )
     state["identity"]["config_sha256"] = (
         "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
@@ -302,9 +305,29 @@ def test_previous_model_run_identity_is_not_resumable(tmp_path):
         _orchestrator(tmp_path, proposer, evaluator).state()
 
 
+def _iteration1_recipient_envelope() -> dict:
+    return build_prompt_proposer_input(
+        iteration=1,
+        parent_id="cot",
+        parent_templates=canonical_baseline_sources(),
+        aggregate_search_metrics={
+            "macro_f1": 0.9,
+            "accuracy": 0.9,
+            "parse_coverage": 1.0,
+            "total_records": EXPERIMENT_SEARCH_SIZE,
+            "parsed_predictions": EXPERIMENT_SEARCH_SIZE,
+            "abstentions_or_parse_failures": 0,
+            "infrastructure_failures": 0,
+        },
+        lineage=[],
+        representative_search_failures=[],
+    )
+
+
 def test_accepted_receipt_recovers_without_reproposing_after_interruption(tmp_path):
     templates = {
-        method: source + "\nRecovered independent check."
+        method: source
+        + "\nRecovered independent check. Respond with 'yes' or 'no'."
         for method, source in canonical_baseline_sources().items()
     }
     candidate = {
@@ -315,6 +338,9 @@ def test_accepted_receipt_recovers_without_reproposing_after_interruption(tmp_pa
         "templates": templates,
         "source_sha256": template_source_sha256(templates),
     }
+    envelope = _iteration1_recipient_envelope()
+    base_prompt = pp._build_prompt(envelope)
+    base_hash = hashlib.sha256(base_prompt.encode("utf-8")).hexdigest()
     receipt_path = (
         tmp_path
         / "workspace"
@@ -328,13 +354,21 @@ def test_accepted_receipt_recovers_without_reproposing_after_interruption(tmp_pa
     receipt_path.parent.mkdir(parents=True)
     receipt_path.write_text(
         canonical_json(
-                {
-                    "protocol_id": EXPERIMENT_PROTOCOL_ID,
-                    "status": "accepted",
-                    "iteration": 1,
-                    "attempt": 1,
-                    "candidate": candidate,
-                }
+            {
+                "schema_version": pp.EXPERIMENT_PROPOSER_SCHEMA_VERSION,
+                "protocol_id": EXPERIMENT_PROTOCOL_ID,
+                "instruction_version": pp.EXPERIMENT_PROPOSER_INSTRUCTION_VERSION,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "status": "accepted",
+                "iteration": 1,
+                "attempt": 1,
+                "input_sha256": base_hash,
+                "attempt_prompt_sha256": base_hash,
+                "category": None,
+                "candidate_id": "candidate_001",
+                "candidate_source_sha256": template_source_sha256(templates),
+                "candidate": candidate,
+            }
         ),
         encoding="utf-8",
     )
@@ -440,7 +474,8 @@ def test_mocked_complete_search_flow_resumes_from_atomic_checkpoint(tmp_path):
             assert "sample_id" not in repr(envelope)
             iteration = envelope["iteration"]
             templates = {
-                method: source + f"\nMocked integration check {iteration}."
+                method: source
+        + f"\nMocked integration check {iteration}. Respond with 'yes' or 'no'."
                 for method, source in envelope["parent"]["templates"].items()
             }
             payload = {
@@ -517,3 +552,79 @@ def test_mocked_complete_search_flow_resumes_from_atomic_checkpoint(tmp_path):
         for call in evaluator.candidate_calls
     ) == 1
     assert json.loads(resumed.state_path.read_text(encoding="utf-8")) == state
+
+
+def _capturing_proposer():
+    class CapturingProposer(FakeProposer):
+        def __init__(self):
+            super().__init__()
+            self.lineage_by_iteration: dict[int, list[dict]] = {}
+            self.failure_summaries_by_iteration: dict[int, list[dict]] = {}
+
+        def propose(self, **kwargs):
+            self.lineage_by_iteration[kwargs["iteration"]] = list(
+                kwargs.get("lineage", ())
+            )
+            self.failure_summaries_by_iteration[kwargs["iteration"]] = list(
+                kwargs.get("representative_search_failures", ())
+            )
+            return super().propose(**kwargs)
+
+    return CapturingProposer()
+
+
+def test_history_delta_is_relative_to_own_parent_not_later_winner(tmp_path):
+    proposer = _capturing_proposer()
+    evaluator = FakeEvaluator(
+        p0_metrics=(0.6, 0.6),
+        candidate_metrics=lambda it: {1: (0.8, 0.8), 2: (0.9, 0.9)}.get(
+            it, (0.9, 0.9)
+        ),
+    )
+
+    _orchestrator(tmp_path, proposer, evaluator).run()
+
+    lineage_3 = proposer.lineage_by_iteration[3]
+    c1 = next(entry for entry in lineage_3 if entry["candidate_id"] == "candidate_001")
+    c2 = next(entry for entry in lineage_3 if entry["candidate_id"] == "candidate_002")
+
+    # candidate_001's parent is cot (0.6), so its delta is +0.2 and it improved
+    # at creation, even though candidate_002 (0.9) later superseded it as winner.
+    assert c1["parent_id"] == "cot"
+    assert c1["delta_macro_f1"] == pytest.approx(0.2)
+    assert c1["improved"] is True
+    assert c1["hypothesis"] and c1["expected_tradeoff"]
+    assert "source_sha256" in c1 and "parse_coverage" in c1
+    # candidate_002's parent is candidate_001 (0.8), so delta is +0.1.
+    assert c2["parent_id"] == "candidate_001"
+    assert c2["delta_macro_f1"] == pytest.approx(0.1)
+    assert c2["improved"] is True
+
+
+def test_aggregate_failure_summaries_are_safe_and_derived(tmp_path):
+    class ParsingFailureEvaluator(FakeEvaluator):
+        def candidate(self, **kwargs):
+            report = super().candidate(**kwargs)
+            iteration = int(kwargs["candidate_id"].rsplit("_", 1)[1])
+            if iteration <= 2:
+                report["abstentions_or_parse_failures"] = 2
+            return report
+
+    proposer = _capturing_proposer()
+    evaluator = ParsingFailureEvaluator()
+
+    _orchestrator(tmp_path, proposer, evaluator).run()
+
+    summaries = proposer.failure_summaries_by_iteration[3]
+    parse_entries = [entry for entry in summaries if entry["pattern"] == "parse_failure"]
+    assert parse_entries
+    assert parse_entries[0]["count"] == 4
+    assert parse_entries[0]["methods"] == []
+    assert "per-method" in parse_entries[0]["summary"] or "unknown" in parse_entries[0][
+        "summary"
+    ]
+    serialized = repr(summaries)
+    assert "FINAL" not in serialized
+    assert "sample_id" not in serialized
+    assert "gold_label" not in serialized
+    assert "raw_trace" not in serialized

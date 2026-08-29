@@ -53,7 +53,7 @@ class SequenceSolver:
 
 def _request():
     return SolverRequest(
-        model="Qwen2.5-VL-7B-Instruct",
+        model="gemma-4-26B-A4B-it",
         messages=({"role": "user", "content": "safe request"},),
         generation=SolverGenerationSettings(
             temperature=0,

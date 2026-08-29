@@ -15,7 +15,7 @@ OPTIONS="--overwrite"
 
 
 MODELS=(
-  "Qwen/Qwen2.5-VL-7B-Instruct"
+  "gemma-4-26B-A4B-it"
 )
 
 PROMPTS=(

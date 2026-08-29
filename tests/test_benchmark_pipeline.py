@@ -23,7 +23,7 @@ FAKE_API_KEY = "obviously-fake-integration-key"
 FAKE_API_URL = "https://invalid.example.test/chat/completions"
 
 BENCHMARK_CASES = (
-    ("SciVer", "Qwen2.5-VL-7B-Instruct", "direct", "yes"),
+    ("SciVer", "gemma-4-26B-A4B-it", "direct", "yes"),
     ("SciAtomicBench", "gemma-4-31B-it", "analytical", "no"),
     ("MuSciClaims", "gemma-4-26B-A4B-it", "parallel", "yes"),
     ("SciClaimEval", "gemma-3-27b-it", "sequential", "no"),

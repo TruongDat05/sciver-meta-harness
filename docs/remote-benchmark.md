@@ -1,8 +1,9 @@
 # Compatible-HTTP benchmark guide
 
 This guide covers the generic benchmark CLI. It is independent from the
-SciVer-only Meta-Harness Meta-Harness and its server runbook; it has its own dataset
-adapters, model matrix, output/checkpoint workflow, and complete-URL contract.
+SciVer-only Meta-Harness and its [server runbook](sciver_meta_harness_operations.md);
+it has its own dataset adapters, model matrix, output/checkpoint workflow, and
+complete-URL contract.
 
 SciVer includes an additive compatible-HTTP path for multimodal scientific
 claim verification. Existing local inference paths remain available and
@@ -14,7 +15,6 @@ remain offline, and this path never downloads model weights.
 
 The registered model identifiers are:
 
-- `Qwen2.5-VL-7B-Instruct`
 - `gemma-4-31B-it`
 - `gemma-4-26B-A4B-it`
 - `gemma-3-27b-it`
@@ -151,7 +151,7 @@ non-secret shell variables first:
 ```bash
 DATASET='SciVer'
 DATASET_PATH='/absolute/path/to/released_or_normalized_data'
-MODEL='Qwen2.5-VL-7B-Instruct'
+MODEL='gemma-4-26B-A4B-it'
 REQUEST_DELAY='1.0'
 ```
 

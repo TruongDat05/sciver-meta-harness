@@ -170,7 +170,7 @@ Apply these invariants in every mode:
 
 ## Safety and external boundaries
 
-- The fixed solver is Qwen2.5-VL-7B-Instruct through an OpenAI-compatible vLLM
+- The fixed solver is gemma-4-26B-A4B-it through an OpenAI-compatible vLLM
   endpoint. Trusted Python owns all solver orchestration.
 - Read the endpoint only from `API_URL` and credentials only from `API_KEY`.
   Never hardcode, persist, print, log, serialize, or otherwise expose either,

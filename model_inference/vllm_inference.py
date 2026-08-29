@@ -13,7 +13,7 @@ model_example_map = {
     "mistral-community/pixtral-12b": prepare_pixtral_inputs,
     "llava-hf/llava-onevision-qwen2-7b-ov-chat-hf": prepare_llava_onevision_inputs,
     "unsloth/Llama-3.2-11B-Vision-Instruct": prepare_mllama_inputs,
-    "Qwen/Qwen2.5-VL-7B-Instruct": prepare_qwen2_inputs,
+    "gemma-4-26B-A4B-it": prepare_general_vlm_inputs,
     "OpenGVLab/InternVL3-8B":prepare_general_vlm_inputs,
     "OpenGVLab/InternVL3-38B":prepare_general_vlm_inputs,
     "Qwen/Qwen2.5-VL-72B-Instruct": prepare_qwen2_inputs, 

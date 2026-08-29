@@ -35,7 +35,7 @@ from meta_harness.prompt_proposer import (
     ProposalExhausted,
     ProposalResult,
     build_prompt_proposer_input,
-    load_experiment_accepted_proposal,
+    recover_accepted_experiment_proposal,
 )
 from meta_harness.run_identity import validate_run_identity
 from meta_harness.ranking import (
@@ -66,6 +66,18 @@ _SENSITIVE_IDENTITY = re.compile(
     r"https?://|base64|data:image/)",
     re.IGNORECASE,
 )
+_FAILURE_SUMMARY_TEMPLATE = {
+    "parse_failure": (
+        "Family-wide aggregate SEARCH parse and abstention failures across the "
+        "evaluated candidate family. Only a single combined count is known; "
+        "per-method attribution is unknown and not derived."
+    ),
+    "infrastructure_failure": (
+        "Family-wide aggregate SEARCH transport infrastructure failures across "
+        "the evaluated candidate family. Only a single combined count is known; "
+        "per-method attribution is unknown and not derived."
+    ),
+}
 
 
 class OrchestrationError(RuntimeError):
@@ -345,11 +357,66 @@ class Orchestrator:
             self._notify("candidate_complete")
         return entry["status"] == "complete"
 
+    def _proposer_failure_summaries(self) -> list[dict[str, Any]]:
+        """Combine explicit summaries with safe aggregate method-level ones.
+
+        Aggregate summaries are derived deterministically from completed SEARCH
+        evaluation reports using only aggregate counts (no records, IDs, labels,
+        predictions, raw responses, traces, secrets, or FINAL data). Only a
+        family-wide combined count is known, so `methods` is left empty and the
+        summary text states the attribution is family-wide/unknown; per-method
+        or per-record attribution is never fabricated.
+        """
+        combined = list(self.representative_search_failures)
+        aggregated: dict[str, int] = {}
+        reports = [self._state.get("p0", {}).get("report")] + [
+            entry["report"]
+            for entry in self._state["iterations"]
+            if entry.get("report") is not None
+        ]
+        for report in reports:
+            if not isinstance(report, Mapping):
+                continue
+            for pattern, field in (
+                ("parse_failure", "abstentions_or_parse_failures"),
+                ("infrastructure_failure", "infrastructure_failures"),
+            ):
+                count = report.get(field, 0)
+                if isinstance(count, int) and count > 0:
+                    aggregated[pattern] = aggregated.get(pattern, 0) + count
+        for pattern in sorted(aggregated):
+            combined.append(
+                {
+                    "pattern": pattern,
+                    "summary": _FAILURE_SUMMARY_TEMPLATE[pattern],
+                    "count": aggregated[pattern],
+                    "methods": [],
+                }
+            )
+        return combined
+
     def _recover_or_propose(self, iteration: int) -> ProposalResult | None:
-        recovered = self._recover_accepted_proposal(iteration)
+        parent_id, parent_templates = self._parent_for_next_proposal()
+        envelope = build_prompt_proposer_input(
+            iteration=iteration,
+            parent_id=parent_id,
+            parent_templates=parent_templates,
+            aggregate_search_metrics=self._aggregate_search_metrics(),
+            lineage=self._candidate_lineage(),
+            representative_search_failures=self._proposer_failure_summaries(),
+        )
+        directory = self.run_directory / "proposals" / f"iteration_{iteration:04d}"
+        recovered = recover_accepted_experiment_proposal(
+            directory,
+            expected_iteration=iteration,
+            expected_parent_id=parent_id,
+            parent_templates=parent_templates,
+            envelope=envelope,
+            existing_candidate_ids=self._existing_candidate_ids(),
+            existing_source_sha256=self._existing_prompt_hashes(),
+        )
         if recovered is not None:
             return recovered
-        parent_id, parent_templates = self._parent_for_next_proposal()
         try:
             return self.proposer.propose(
                 proposal_directory=self.repository_root,
@@ -359,7 +426,7 @@ class Orchestrator:
                 parent_templates=parent_templates,
                 aggregate_search_metrics=self._aggregate_search_metrics(),
                 lineage=self._candidate_lineage(),
-                representative_search_failures=self.representative_search_failures,
+                representative_search_failures=self._proposer_failure_summaries(),
                 existing_candidate_ids=self._existing_candidate_ids(),
                 existing_source_sha256=self._existing_prompt_hashes(),
             )
@@ -370,33 +437,6 @@ class Orchestrator:
             self._state["status"] = "proposal_exhausted"
             self._persist("proposal_exhausted")
             return None
-
-    def _recover_accepted_proposal(
-        self, iteration: int
-    ) -> ProposalResult | None:
-        directory = self.run_directory / "proposals" / f"iteration_{iteration:04d}"
-        if not directory.is_dir():
-            return None
-        accepted: list[ProposalResult] = []
-        for path in sorted(directory.glob("attempt_*.json")):
-            try:
-                proposal = load_experiment_accepted_proposal(
-                    path, expected_iteration=iteration
-                )
-            except Exception as exc:
-                if _receipt_declares_accepted(path):
-                    raise OrchestrationError(
-                        "accepted proposal receipt is corrupt"
-                    ) from exc
-                continue
-            accepted.append(proposal)
-        if not accepted:
-            return None
-        if len(accepted) != 1 or accepted[0].candidate.candidate_id in self._existing_candidate_ids():
-            raise OrchestrationError(
-                "proposal receipts are incompatible with resumable state"
-            )
-        return accepted[0]
 
     def _apply_completed_iteration(self, entry: Mapping[str, Any]) -> None:
         reports = [self._state["p0"]["report"]] + [
@@ -456,19 +496,80 @@ class Orchestrator:
                 }
         raise OrchestrationError("Meta-Harness winner metrics are unavailable")
 
-    def _candidate_lineage(self) -> list[dict[str, str]]:
-        lineage = []
+    def _candidate_lineage(self) -> list[dict[str, Any]]:
+        """Build bounded, sanitized SEARCH history for the proposer.
+
+        Each candidate's deltas are computed against that candidate's own
+        declared parent, never against the latest global winner, so a candidate
+        that improved when created but was later superseded still reports its
+        true parent-relative improvement.
+        """
+        metrics_by_id: dict[str, Mapping[str, Any]] = {}
+        p0_report = self._state.get("p0", {}).get("report")
+        if isinstance(p0_report, Mapping) and isinstance(
+            p0_report.get("metrics"), Mapping
+        ):
+            metrics_by_id[p0_report["candidate_id"]] = p0_report["metrics"]
+        for entry in self._state["iterations"]:
+            candidate = entry.get("candidate")
+            report = entry.get("report")
+            if candidate is None or not isinstance(report, Mapping):
+                continue
+            metrics = report.get("metrics")
+            if isinstance(metrics, Mapping):
+                metrics_by_id[candidate["candidate_id"]] = metrics
+
+        lineage: list[dict[str, Any]] = []
         for entry in self._state["iterations"]:
             candidate = entry.get("candidate")
             if candidate is None:
                 continue
-            lineage.append(
-                {
-                    "candidate_id": candidate["candidate_id"],
-                    "parent_id": candidate["parent_id"],
-                    "source_sha256": candidate["source_sha256"],
-                }
-            )
+            report = entry.get("report")
+            metrics = report.get("metrics") if isinstance(report, Mapping) else None
+            parent_metrics = metrics_by_id.get(candidate["parent_id"], {})
+            item: dict[str, Any] = {
+                "candidate_id": candidate["candidate_id"],
+                "parent_id": candidate["parent_id"],
+                "hypothesis": candidate["hypothesis"],
+                "expected_tradeoff": candidate["expected_tradeoff"],
+                "source_sha256": candidate["source_sha256"],
+            }
+            if isinstance(metrics, Mapping):
+                macro_f1 = metrics.get("macro_f1")
+                accuracy = metrics.get("accuracy")
+                parse_coverage = metrics.get("parse_coverage")
+                if isinstance(macro_f1, (int, float)):
+                    item["macro_f1"] = round(float(macro_f1), 6)
+                if isinstance(accuracy, (int, float)):
+                    item["accuracy"] = round(float(accuracy), 6)
+                if isinstance(parse_coverage, (int, float)):
+                    item["parse_coverage"] = round(float(parse_coverage), 6)
+                parent_f1 = parent_metrics.get("macro_f1")
+                parent_acc = parent_metrics.get("accuracy")
+                parent_cov = parent_metrics.get("parse_coverage")
+                if (
+                    isinstance(macro_f1, (int, float))
+                    and isinstance(parent_f1, (int, float))
+                ):
+                    delta_f1 = round(float(macro_f1) - float(parent_f1), 6)
+                    item["delta_macro_f1"] = delta_f1
+                    if isinstance(accuracy, (int, float)) and isinstance(
+                        parent_acc, (int, float)
+                    ):
+                        delta_acc = round(float(accuracy) - float(parent_acc), 6)
+                        item["delta_accuracy"] = delta_acc
+                    if isinstance(parse_coverage, (int, float)) and isinstance(
+                        parent_cov, (int, float)
+                    ):
+                        item["delta_parse_coverage"] = round(
+                            float(parse_coverage) - float(parent_cov), 6
+                        )
+                    item["improved"] = delta_f1 > 0 or (
+                        delta_f1 == 0
+                        and isinstance(item.get("delta_accuracy"), float)
+                        and item["delta_accuracy"] > 0
+                    )
+            lineage.append(item)
         return lineage
 
     def _existing_candidate_ids(self) -> list[str]:
@@ -734,14 +835,6 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ResumeError("duplicate state JSON key")
         result[key] = value
     return result
-
-
-def _receipt_declares_accepted(path: Path) -> bool:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    return isinstance(value, Mapping) and value.get("status") == "accepted"
 
 
 def experiment_orchestration_state_path(

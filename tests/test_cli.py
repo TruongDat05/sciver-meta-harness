@@ -11,7 +11,7 @@ import main as cli_module
 from utils.result_writer import ResultWriter, SUCCESS, iter_result_records
 
 
-MODEL = "Qwen2.5-VL-7B-Instruct"
+MODEL = "gemma-4-26B-A4B-it"
 RAW_RESPONSE = "Therefore, the final answer is: Answer: yes"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 

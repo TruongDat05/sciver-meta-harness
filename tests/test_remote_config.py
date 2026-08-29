@@ -20,7 +20,6 @@ from model_inference.remote_config import (
 
 
 EXPECTED_MODELS = (
-    "Qwen2.5-VL-7B-Instruct",
     "gemma-4-31B-it",
     "gemma-4-26B-A4B-it",
     "gemma-3-27b-it",

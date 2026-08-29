@@ -17,7 +17,7 @@ This is the normative specification for the SciVer-only `sciver_full_search_v3` 
 
 - Protocol ID: `sciver_full_search_v3`.
 - Select exactly 2,000 SciVer samples with seed 42: exactly 1,000 SEARCH and 1,000 FINAL records. The splits are paper-disjoint and selection is independent of labels, predictions, difficulty, baseline errors, and model-derived signals. Preparation fails if exact counts are impossible.
-- The solver is `Qwen2.5-VL-7B-Instruct`, with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming output, and `max_tokens=8192`.
+- The solver is `gemma-4-26B-A4B-it`, with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming output, and `max_tokens=8192`.
 - Canonical P0 and each valid candidate use the same complete immutable ordered 1,000-record SEARCH split. A candidate has exactly `direct`, `analytical`, `parallel`, and `sequential`; only their text changes. Prompt interfaces, answer format, parser, labels, claims, context, captions, image count/order, model, and generation semantics remain fixed.
 - Propose one candidate per iteration. Complete 15--40 candidate iterations, permitting at most three invalid or duplicate proposals per iteration. Rejected proposals dispatch no solver request. Stop after eight consecutive completed iterations without a metric improvement, never before iteration 15.
 - Rank P0 and eligible candidates by SEARCH Macro-F1 descending, SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID ascending. Only Macro-F1 improvement, or Accuracy improvement when Macro-F1 ties, resets patience; a hash/ID-only winner change does not.

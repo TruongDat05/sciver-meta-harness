@@ -28,7 +28,7 @@ IMAGE_DATA = "A" * 160
 
 def _request():
     return SolverRequest(
-        model="Qwen2.5-VL-7B-Instruct",
+        model="gemma-4-26B-A4B-it",
         messages=(
             {
                 "role": "user",

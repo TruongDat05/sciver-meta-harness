@@ -101,7 +101,7 @@ class _FakeFinalSolver:
         self.calls: list[str] = []
 
     def list_model_ids(self):
-        return ("Qwen2.5-VL-7B-Instruct",)
+        return ("gemma-4-26B-A4B-it",)
 
     def complete(self, request: SolverRequest) -> SolverResult:
         if self.interrupt_after is not None and len(self.calls) == self.interrupt_after:

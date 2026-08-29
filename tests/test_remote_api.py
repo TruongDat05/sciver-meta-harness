@@ -16,7 +16,7 @@ from model_inference.remote_config import RemoteAPIConfig
 from utils.constant import COT_PROMPT
 
 
-MODEL = "Qwen2.5-VL-7B-Instruct"
+MODEL = "gemma-4-26B-A4B-it"
 GROUND_TRUTH_MARKER = "GROUND_TRUTH_MUST_NOT_LEAK"
 RAW_RESPONSE = "Reasoning. Therefore, the final answer is: Answer: yes"
 
