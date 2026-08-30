@@ -1,8 +1,13 @@
-"""Offline, create-once freezing of a terminal full-SEARCH winner.
+"""Offline, create-once freezing of the terminal full-SEARCH top-K.
 
 This module intentionally consumes only the durable SEARCH orchestration
 state.  It has no FINAL inputs, paths, evaluator, solver, or proposer
 dependencies, so freezing is a strict boundary before paired FINAL work.
+
+The frozen artifact holds the deterministically selected, ranked top-K
+eligible SEARCH candidates in rank order.  P0 is deliberately kept separate
+from top-K and carried only by its canonical hash so FINAL always evaluates
+P0 plus the K frozen candidates exactly once each.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from meta_harness.config import (
     EXPERIMENT_MIN_ITERATIONS,
     EXPERIMENT_PATIENCE,
     EXPERIMENT_PROTOCOL_ID,
+    EXPERIMENT_TOP_K,
     canonical_experiment_config,
 )
 from meta_harness.search_evaluator import (
@@ -44,14 +50,13 @@ from meta_harness.ranking import (
 from meta_harness.prompt_family import (
     TEMPLATE_KEYS,
     PromptFamily,
-    canonical_baseline_sources,
     canonical_json,
     template_source_sha256,
 )
 
 
-EXPERIMENT_FREEZE_SCHEMA_VERSION = "sciver_full_search_v3_freeze_v1"
-EXPERIMENT_FREEZE_VERSION = "sciver_full_search_v3_offline_freeze_v1"
+EXPERIMENT_FREEZE_SCHEMA_VERSION = "sciver_full_search_v3_freeze_v2"
+EXPERIMENT_FREEZE_VERSION = "sciver_full_search_v3_offline_freeze_v2"
 EXPERIMENT_FREEZE_VARIANT = "meta_cot"
 _STATE_FILENAME = "orchestration_state.json"
 _FREEZE_FILENAME = "frozen_winner.json"
@@ -62,7 +67,7 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class FreezeError(RuntimeError):
-    """Raised when a SEARCH winner cannot safely become immutable P*."""
+    """Raised when SEARCH candidates cannot safely become immutable top-K."""
 
 
 class FrozenArtifactConflictError(FreezeError):
@@ -80,12 +85,13 @@ def experiment_frozen_winner_path(
 def freeze_experiment_winner(
     *, repository_root: str | Path, run_id: str
 ) -> dict[str, Any]:
-    """Verify a terminal SEARCH run and atomically freeze its ranked P*.
+    """Verify a terminal SEARCH run and atomically freeze its ranked top-K.
 
-    The stored winner and ranking are never trusted on their own: this entry
-    point reconstructs eligible reports, applies the locked rank key, and
-    checks the durable patience/schedule state before serializing a create-once
-    ``meta_cot`` artifact.  It neither accepts nor reads FINAL material.
+    The stored ranking and winner are never trusted on their own: this entry
+    point reconstructs eligible reports, applies the locked rank key, selects
+    the top-K candidates (P0 kept separate), and checks the durable
+    patience/schedule state before serializing a create-once ``meta_cot``
+    top-K artifact.  It neither accepts nor reads FINAL material.
     """
 
     run_directory = _run_directory(repository_root, run_id)
@@ -105,34 +111,31 @@ def freeze_experiment_winner(
 
 
 def load_experiment_frozen_winner(path: str | Path) -> dict[str, Any]:
-    """Load a frozen artifact and reject malformed or tampered content."""
+    """Load a frozen top-K artifact and reject malformed or tampered content."""
 
-    artifact = _load_canonical_object(Path(path), "frozen winner")
+    artifact = _load_canonical_object(Path(path), "frozen top-K")
     required = {
         "schema_version",
         "freeze_version",
         "run_id",
         "prompt_variant",
-        "winner",
-        "templates",
+        "top_k",
         "search_metrics",
         "hashes",
         "artifact_sha256",
     }
     if set(artifact) != required:
-        raise FreezeError("frozen winner fields are invalid")
+        raise FreezeError("frozen top-K fields are invalid")
     if artifact["schema_version"] != EXPERIMENT_FREEZE_SCHEMA_VERSION:
-        raise FreezeError("unsupported frozen winner schema")
+        raise FreezeError("unsupported frozen top-K schema")
     if artifact["freeze_version"] != EXPERIMENT_FREEZE_VERSION:
-        raise FreezeError("unsupported frozen winner version")
+        raise FreezeError("unsupported frozen top-K version")
     if artifact["prompt_variant"] != EXPERIMENT_FREEZE_VARIANT:
-        raise FreezeError("frozen winner must register meta_cot")
+        raise FreezeError("frozen top-K must register meta_cot variants")
     _run_id(artifact["run_id"])
-    templates = _template_sources(artifact["templates"], "frozen templates")
     hashes = artifact["hashes"]
     if not isinstance(hashes, Mapping) or set(hashes) != {
-        "prompt_sha256",
-        "source_sha256",
+        "p0_prompt_sha256",
         "config_sha256",
         "split_sha256",
         "search_membership_sha256",
@@ -140,36 +143,55 @@ def load_experiment_frozen_winner(path: str | Path) -> dict[str, Any]:
         "ranking_sha256",
         "run_identity_sha256",
     }:
-        raise FreezeError("frozen winner hashes are invalid")
+        raise FreezeError("frozen top-K hashes are invalid")
     for name, value in hashes.items():
         _sha256(value, f"hashes.{name}")
-    prompt_sha256 = template_source_sha256(templates)
-    if hashes["prompt_sha256"] != prompt_sha256 or hashes["source_sha256"] != prompt_sha256:
-        raise FreezeError("frozen winner prompt hash is inconsistent")
-    _validate_frozen_winner(artifact["winner"], prompt_sha256)
-    _validate_search_metrics(artifact["search_metrics"])
+    if hashes["p0_prompt_sha256"] != canonical_experiment_p0_prompt_sha256():
+        raise FreezeError("frozen P0 identity is inconsistent")
+    _validate_top_k(artifact["top_k"])
+    ranked = _validate_frozen_search_metrics(artifact["search_metrics"])
+    _validate_top_k_ranking_binding(artifact["top_k"], ranked)
     if hashes["ranking_sha256"] != _sha256_json(artifact["search_metrics"]["ranking"]):
         raise FreezeError("frozen ranking hash is inconsistent")
     _sha256(artifact["artifact_sha256"], "artifact_sha256")
     expected = _sha256_json({key: value for key, value in artifact.items() if key != "artifact_sha256"})
     if artifact["artifact_sha256"] != expected:
-        raise FreezeError("frozen winner artifact hash is inconsistent")
+        raise FreezeError("frozen top-K artifact hash is inconsistent")
     return _json_copy(artifact)
 
 
 def _build_frozen_artifact(*, run_id: str, state: Mapping[str, Any]) -> dict[str, Any]:
     identity, ranking, reports_by_id, candidate_templates = _verify_terminal_state(state)
-    winner = ranking[0]
-    templates = (
-        canonical_baseline_sources()
-        if winner.candidate_id == EXPERIMENT_P0_CANDIDATE_ID
-        else candidate_templates[winner.candidate_id]
-    )
-    sources = _template_sources(templates, "winner templates")
-    prompt_sha256 = template_source_sha256(sources)
-    if prompt_sha256 != winner.prompt_sha256:
-        raise FreezeError("recomputed winner prompt hash is inconsistent")
-    report = reports_by_id[winner.candidate_id]
+    candidates = [item for item in ranking if item.candidate_id != EXPERIMENT_P0_CANDIDATE_ID]
+    if len(candidates) < EXPERIMENT_TOP_K:
+        raise FreezeError("SEARCH run has fewer eligible candidates than top-K")
+    top_k = []
+    for rank, item in enumerate(candidates[:EXPERIMENT_TOP_K], start=1):
+        templates = candidate_templates[item.candidate_id]
+        sources = _template_sources(templates, "top-K candidate templates")
+        prompt_sha256 = template_source_sha256(sources)
+        if prompt_sha256 != item.prompt_sha256:
+            raise FreezeError("recomputed top-K prompt hash is inconsistent")
+        report = reports_by_id[item.candidate_id]
+        top_k.append(
+            {
+                "rank": rank,
+                "candidate_id": item.candidate_id,
+                "source_kind": "search_candidate",
+                "prompt_sha256": prompt_sha256,
+                "templates": sources,
+                "search_metrics": {
+                    "macro_f1": item.macro_f1,
+                    "accuracy": item.accuracy,
+                    "parse_coverage": report["metrics"]["parse_coverage"],
+                    "total_records": report["total_records"],
+                    "completed_solver_responses": report["completed_solver_responses"],
+                    "parsed_predictions": report["parsed_predictions"],
+                    "abstentions_or_parse_failures": report["abstentions_or_parse_failures"],
+                    "infrastructure_failures": report["infrastructure_failures"],
+                },
+            }
+        )
     ranking_payload = [
         {
             "candidate_id": item.candidate_id,
@@ -184,30 +206,10 @@ def _build_frozen_artifact(*, run_id: str, state: Mapping[str, Any]) -> dict[str
         "freeze_version": EXPERIMENT_FREEZE_VERSION,
         "run_id": run_id,
         "prompt_variant": EXPERIMENT_FREEZE_VARIANT,
-        "winner": {
-            "candidate_id": winner.candidate_id,
-            "source_kind": (
-                "canonical_cot"
-                if winner.candidate_id == EXPERIMENT_P0_CANDIDATE_ID
-                else "search_candidate"
-            ),
-            "rank": 1,
-        },
-        "templates": sources,
-        "search_metrics": {
-            "macro_f1": winner.macro_f1,
-            "accuracy": winner.accuracy,
-            "parse_coverage": report["metrics"]["parse_coverage"],
-            "total_records": report["total_records"],
-            "completed_solver_responses": report["completed_solver_responses"],
-            "parsed_predictions": report["parsed_predictions"],
-            "abstentions_or_parse_failures": report["abstentions_or_parse_failures"],
-            "infrastructure_failures": report["infrastructure_failures"],
-            "ranking": ranking_payload,
-        },
+        "top_k": top_k,
+        "search_metrics": {"ranking": ranking_payload},
         "hashes": {
-            "prompt_sha256": prompt_sha256,
-            "source_sha256": prompt_sha256,
+            "p0_prompt_sha256": identity["canonical_p0_prompt_sha256"],
             "config_sha256": identity["config_sha256"],
             "split_sha256": identity["split_sha256"],
             "search_membership_sha256": identity["search_membership_sha256"],
@@ -355,24 +357,48 @@ def _template_sources(value: Any, context: str) -> dict[str, str]:
     return {method: family[method].template for method in TEMPLATE_KEYS}
 
 
-def _validate_frozen_winner(value: Any, prompt_sha256: str) -> None:
-    if not isinstance(value, Mapping) or set(value) != {"candidate_id", "source_kind", "rank"}:
-        raise FreezeError("frozen winner fields are invalid")
-    _safe_identifier(value["candidate_id"])
-    if value["source_kind"] not in {"canonical_cot", "search_candidate"} or value["rank"] != 1:
-        raise FreezeError("frozen winner source is invalid")
-    if value["candidate_id"] == EXPERIMENT_P0_CANDIDATE_ID:
-        if value["source_kind"] != "canonical_cot" or prompt_sha256 != canonical_experiment_p0_prompt_sha256():
-            raise FreezeError("frozen cot winner is inconsistent")
-    elif value["source_kind"] != "search_candidate":
-        raise FreezeError("frozen candidate winner source is invalid")
+def _validate_top_k(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != EXPERIMENT_TOP_K:
+        raise FreezeError("frozen top-K must contain exactly K ordered candidates")
+    seen: set[str] = set()
+    for index, entry in enumerate(value):
+        rank = index + 1
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "rank", "candidate_id", "source_kind", "prompt_sha256", "templates", "search_metrics",
+        }:
+            raise FreezeError("frozen top-K entry is invalid")
+        if entry["rank"] != rank:
+            raise FreezeError("frozen top-K must be strictly rank ordered")
+        candidate_id = _safe_identifier(entry["candidate_id"])
+        if candidate_id == EXPERIMENT_P0_CANDIDATE_ID or candidate_id in seen:
+            raise FreezeError("frozen top-K candidates are not unique or include P0")
+        seen.add(candidate_id)
+        if entry["source_kind"] != "search_candidate":
+            raise FreezeError("frozen top-K candidate source is invalid")
+        sources = _template_sources(entry["templates"], "frozen top-K templates")
+        prompt_sha256 = template_source_sha256(sources)
+        if entry["prompt_sha256"] != prompt_sha256:
+            raise FreezeError("frozen top-K candidate prompt hash is inconsistent")
+        _validate_candidate_search_metrics(entry["search_metrics"])
 
 
-def _validate_search_metrics(value: Any) -> None:
+def _validate_candidate_search_metrics(value: Any) -> None:
     required = {
         "macro_f1", "accuracy", "parse_coverage", "total_records", "completed_solver_responses",
-        "parsed_predictions", "abstentions_or_parse_failures", "infrastructure_failures", "ranking",
+        "parsed_predictions", "abstentions_or_parse_failures", "infrastructure_failures",
     }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise FreezeError("frozen top-K SEARCH metrics are invalid")
+    if any(isinstance(value[field], bool) or not isinstance(value[field], (int, float)) for field in ("macro_f1", "accuracy")):
+        raise FreezeError("frozen top-K SEARCH metrics are invalid")
+    if value["parse_coverage"] != 1.0 or any(value[field] != 1000 for field in (
+        "total_records", "completed_solver_responses", "parsed_predictions"
+    )) or any(value[field] != 0 for field in ("abstentions_or_parse_failures", "infrastructure_failures")):
+        raise FreezeError("frozen top-K SEARCH completeness metrics are invalid")
+
+
+def _validate_frozen_search_metrics(value: Any) -> list[RankedCandidate]:
+    required = {"ranking"}
     if not isinstance(value, Mapping) or set(value) != required:
         raise FreezeError("frozen SEARCH metrics are invalid")
     ranked = []
@@ -382,13 +408,30 @@ def _validate_search_metrics(value: Any) -> None:
         ranked.append(RankedCandidate(**item))
     if not ranked or tuple(ranked) != tuple(sorted(ranked, key=lambda item: (-item.macro_f1, -item.accuracy, item.prompt_sha256, item.candidate_id))):
         raise FreezeError("frozen ranking order is invalid")
-    winner = ranked[0]
-    if value["macro_f1"] != winner.macro_f1 or value["accuracy"] != winner.accuracy:
-        raise FreezeError("frozen winner metrics are inconsistent")
-    if value["parse_coverage"] != 1.0 or any(value[field] != 1000 for field in (
-        "total_records", "completed_solver_responses", "parsed_predictions"
-    )) or any(value[field] != 0 for field in ("abstentions_or_parse_failures", "infrastructure_failures")):
-        raise FreezeError("frozen SEARCH completeness metrics are invalid")
+    return ranked
+
+
+def _validate_top_k_ranking_binding(top_k: Any, ranked: Sequence[RankedCandidate]) -> None:
+    """Require top-K to exactly equal the first K ranked candidates (after P0)."""
+    candidates = [item for item in ranked if item.candidate_id != EXPERIMENT_P0_CANDIDATE_ID]
+    if len(candidates) < EXPERIMENT_TOP_K:
+        raise FreezeError("frozen SEARCH ranking has fewer candidates than top-K")
+    if not isinstance(top_k, list) or len(top_k) != EXPERIMENT_TOP_K:
+        raise FreezeError("frozen top-K must contain exactly K ordered candidates")
+    for index, entry in enumerate(top_k):
+        expected = candidates[index]
+        if not isinstance(entry, Mapping):
+            raise FreezeError("frozen top-K must match SEARCH ranking")
+        metrics = entry.get("search_metrics")
+        if (
+            entry.get("rank") != index + 1
+            or entry.get("candidate_id") != expected.candidate_id
+            or entry.get("prompt_sha256") != expected.prompt_sha256
+            or not isinstance(metrics, Mapping)
+            or metrics.get("macro_f1") != expected.macro_f1
+            or metrics.get("accuracy") != expected.accuracy
+        ):
+            raise FreezeError("frozen top-K must match SEARCH ranking")
 
 
 def _load_canonical_object(path: Path, label: str) -> dict[str, Any]:
@@ -492,6 +535,7 @@ __all__ = [
     "EXPERIMENT_FREEZE_SCHEMA_VERSION",
     "EXPERIMENT_FREEZE_VARIANT",
     "EXPERIMENT_FREEZE_VERSION",
+    "EXPERIMENT_TOP_K",
     "FreezeError",
     "FrozenArtifactConflictError",
     "freeze_experiment_winner",

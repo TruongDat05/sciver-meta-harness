@@ -9,8 +9,13 @@ from types import MappingProxyType
 
 import pytest
 
-from meta_harness.config import EXPERIMENT_PROTOCOL_ID, EXPERIMENT_SEARCH_SIZE
+from meta_harness.config import (
+    EXPERIMENT_PROTOCOL_ID,
+    EXPERIMENT_SEARCH_SIZE,
+    EXPERIMENT_TOP_K,
+)
 from meta_harness.search_evaluator import (
+    EXPERIMENT_P0_CANDIDATE_ID,
     SearchInput,
     canonical_experiment_p0_prompt_sha256,
 )
@@ -150,7 +155,7 @@ def _offline_subprocess_boundary(monkeypatch):
     )
 
 
-def test_freeze_recomputes_and_freezes_a_candidate_winner_offline(tmp_path, monkeypatch):
+def test_freeze_recomputes_and_freezes_ranked_top_k_offline(tmp_path, monkeypatch):
     _offline_subprocess_boundary(monkeypatch)
     _terminal_state(
         tmp_path,
@@ -162,20 +167,30 @@ def test_freeze_recomputes_and_freezes_a_candidate_winner_offline(tmp_path, monk
     )
 
     assert artifact["prompt_variant"] == "meta_cot"
-    assert artifact["winner"] == {
-        "candidate_id": "candidate_001",
-        "source_kind": "search_candidate",
-        "rank": 1,
-    }
-    assert set(artifact["templates"]) == {
-        "direct", "analytical", "parallel", "sequential"
-    }
+    assert artifact["schema_version"] == "sciver_full_search_v3_freeze_v2"
+    assert len(artifact["top_k"]) == EXPERIMENT_TOP_K
+    assert [entry["rank"] for entry in artifact["top_k"]] == list(
+        range(1, EXPERIMENT_TOP_K + 1)
+    )
+    assert all(
+        entry["source_kind"] == "search_candidate"
+        and entry["candidate_id"] != EXPERIMENT_P0_CANDIDATE_ID
+        and set(entry["templates"]) == {"direct", "analytical", "parallel", "sequential"}
+        and entry["search_metrics"]["parse_coverage"] == 1.0
+        for entry in artifact["top_k"]
+    )
+    assert artifact["top_k"][0]["candidate_id"] == "candidate_001"
+    assert artifact["top_k"][0]["search_metrics"]["macro_f1"] == 0.6
+    assert artifact["hashes"]["p0_prompt_sha256"] == (
+        canonical_experiment_p0_prompt_sha256()
+    )
     assert artifact["hashes"]["ranking_sha256"]
-    assert artifact["search_metrics"]["macro_f1"] == 0.6
     assert experiment_frozen_winner_path(tmp_path, "offline_freeze").is_file()
 
 
-def test_freeze_allows_p0_winner_without_changing_canonical_cot(tmp_path, monkeypatch):
+def test_freeze_keeps_p0_separate_from_top_k_without_changing_canonical_cot(
+    tmp_path, monkeypatch
+):
     _offline_subprocess_boundary(monkeypatch)
     before = dict(canonical_baseline_sources())
     _terminal_state(tmp_path, p0_metrics=(0.9, 0.9))
@@ -185,9 +200,15 @@ def test_freeze_allows_p0_winner_without_changing_canonical_cot(tmp_path, monkey
     )
 
     assert artifact["prompt_variant"] == "meta_cot"
-    assert artifact["winner"]["candidate_id"] == "cot"
-    assert artifact["winner"]["source_kind"] == "canonical_cot"
-    assert artifact["templates"] == before
+    assert len(artifact["top_k"]) == EXPERIMENT_TOP_K
+    assert all(
+        entry["candidate_id"] != EXPERIMENT_P0_CANDIDATE_ID
+        and entry["source_kind"] == "search_candidate"
+        for entry in artifact["top_k"]
+    )
+    assert artifact["hashes"]["p0_prompt_sha256"] == (
+        canonical_experiment_p0_prompt_sha256()
+    )
     assert dict(canonical_baseline_sources()) == before
 
 
@@ -263,8 +284,66 @@ def test_frozen_artifact_hash_tampering_is_rejected(tmp_path, monkeypatch):
     destination = experiment_frozen_winner_path(tmp_path, "offline_freeze")
     freeze_experiment_winner(repository_root=tmp_path, run_id="offline_freeze")
     artifact = json.loads(destination.read_text(encoding="utf-8"))
-    artifact["templates"]["direct"] += " tampered"
+    artifact["top_k"][0]["templates"]["direct"] += " tampered"
     _write_canonical(destination, artifact)
 
     with pytest.raises(FreezeError, match="prompt hash"):
         load_experiment_frozen_winner(destination)
+
+
+def _rewrite_frozen_artifact(path, artifact):
+    artifact["artifact_sha256"] = hashlib.sha256(
+        canonical_json(
+            {key: value for key, value in artifact.items() if key != "artifact_sha256"}
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_text(canonical_json(artifact), encoding="utf-8")
+    return path
+
+
+def _frozen_artifact(tmp_path):
+    _terminal_state(tmp_path)
+    return freeze_experiment_winner(repository_root=tmp_path, run_id="offline_freeze")
+
+
+def test_freeze_rejects_top_k_reordered_against_ranking(tmp_path, monkeypatch):
+    _offline_subprocess_boundary(monkeypatch)
+    artifact = _frozen_artifact(tmp_path)
+    artifact["top_k"][0], artifact["top_k"][1] = artifact["top_k"][1], artifact["top_k"][0]
+    artifact["top_k"][0]["rank"] = 1
+    artifact["top_k"][1]["rank"] = 2
+    path = _rewrite_frozen_artifact(
+        experiment_frozen_winner_path(tmp_path, "offline_freeze"), artifact
+    )
+
+    with pytest.raises(FreezeError, match="ranking"):
+        load_experiment_frozen_winner(path)
+
+
+def test_freeze_rejects_top_k_substituted_lower_ranked_candidate(
+    tmp_path, monkeypatch
+):
+    _offline_subprocess_boundary(monkeypatch)
+    artifact = _frozen_artifact(tmp_path)
+    lower = artifact["search_metrics"]["ranking"][EXPERIMENT_TOP_K + 1]
+    substituted = dict(artifact["top_k"][0])
+    substituted["candidate_id"] = lower["candidate_id"]
+    artifact["top_k"][0] = substituted
+    path = _rewrite_frozen_artifact(
+        experiment_frozen_winner_path(tmp_path, "offline_freeze"), artifact
+    )
+
+    with pytest.raises(FreezeError, match="ranking"):
+        load_experiment_frozen_winner(path)
+
+
+def test_freeze_rejects_top_k_with_tampered_search_metrics(tmp_path, monkeypatch):
+    _offline_subprocess_boundary(monkeypatch)
+    artifact = _frozen_artifact(tmp_path)
+    artifact["top_k"][0]["search_metrics"]["macro_f1"] += 0.01
+    path = _rewrite_frozen_artifact(
+        experiment_frozen_winner_path(tmp_path, "offline_freeze"), artifact
+    )
+
+    with pytest.raises(FreezeError, match="ranking"):
+        load_experiment_frozen_winner(path)

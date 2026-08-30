@@ -55,7 +55,7 @@ from utils.result_writer import API_FAILURE, PARSE_FAILURE, SUCCESS
 
 EXPERIMENT_STAGE = "SEARCH"
 EXPERIMENT_REQUIRED_SPLIT_SHA256 = (
-    "113213a326a1f9c08bd37d8f87d02e269ca8bdba13cbe8743faba8f836dd403c"
+    "5efa3fc587a71da8996072dfced5da4dfd19a22616a6e3be25883723d79542a2"
 )
 EXPERIMENT_METRICS_SCHEMA_VERSION = (
     "sciver_full_search_v3_prediction_metrics_v1"

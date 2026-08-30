@@ -110,7 +110,7 @@ def _completed_reports(state: dict):
 def _aggregate(repo: Path, run_id: str) -> dict:
     state = _read_state(repo, run_id)
     completed = [e for e in state.get("iterations", []) if e.get("status") == "complete"]
-    max_iter = 40
+    max_iter = 50
     label, checkpoint = _checkpoint_for(state, repo, run_id)
     active = _active_checkpoint_counts(checkpoint)
     active["label"] = label

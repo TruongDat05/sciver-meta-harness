@@ -111,24 +111,26 @@ official live experiment and is not an active or compatible protocol.
   SEARCH records. There is no hard subset/objective, smoke scoring gate,
   promotion, or protected validation. Representative SEARCH errors may be
   summarized only as proposer feedback, never as an evaluation subset.
-- Propose one candidate per iteration, with 15 minimum and 40 maximum
+- Propose one candidate per iteration, with 38 minimum and 50 maximum
   iterations, patience 8, and at most three attempts for an invalid or
   duplicate proposal. Rank P0 and candidates by SEARCH Macro-F1 descending,
   SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID
   ascending. A hash/ID-only tie does not reset patience.
 - FINAL is isolated from proposal, SEARCH ranking, patience, and prompt
-  modification. Freeze the offline winner before an explicit FINAL execution;
-  then evaluate frozen P0 and frozen P* exactly once each on the identical
-  1,000 FINAL IDs. FINAL results never modify SEARCH state or the winner.
+  modification. Freeze the offline top-5 SEARCH candidates (P0 kept separate)
+  before an explicit FINAL execution; then evaluate frozen P0 and all 5 frozen
+  candidates exactly once each on the identical 1,000 FINAL IDs (6,000 logical
+  calls). FINAL results never modify SEARCH state, ranking, or the frozen top-K.
 - Support deterministic checkpoint/resume, retry handling, concurrency, and a
   safe SEARCH cache. Tests must stay offline and mock both HTTP and Codex
   subprocess boundaries; tests must never recursively invoke Codex.
 - Legacy hard-search, staged, protected-validation, retry/reparse, and
   transfer modules were removed in the authorized Milestone 7 cleanup. Do not
   reintroduce or route current workflows through those designs.
-- Maximum logical workload is 41,000 SEARCH evaluations (1,000 P0 plus 40,000
-  candidate evaluations), 2,000 FINAL evaluations (1,000 each for P0 and P*),
-  and 43,000 overall. Transport retries are excluded from these counts.
+- Maximum logical workload is 51,000 SEARCH evaluations (1,000 P0 plus 50,000
+  candidate evaluations), 6,000 FINAL evaluations (1,000 for P0 plus 1,000 each
+  for the 5 frozen candidates), and 57,000 overall. Transport retries are
+  excluded from these counts.
 
 ## SciVer Meta-Harness skill
 

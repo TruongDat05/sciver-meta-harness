@@ -6,7 +6,7 @@ This repository contains the SciVer multimodal scientific-claim benchmark, exist
 
 Meta-Harness selects exactly 2,000 SciVer samples with seed 42: 1,000 paper-disjoint SEARCH records and 1,000 paper-disjoint FINAL records. It evaluates canonical P0 and one valid prompt candidate per iteration on the same complete SEARCH split. Candidates may change only the text of the four existing templates: `direct`, `analytical`, `parallel`, and `sequential`.
 
-SEARCH runs 15--40 completed candidate iterations, permits up to three invalid or duplicate proposal attempts per iteration, and stops after patience 8. Ranking is SEARCH Macro-F1 descending, SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID ascending. The SEARCH-only winner is frozen as additive `meta_cot`. A separately authorized FINAL stage evaluates frozen P0 and frozen P* once each on the identical 1,000 FINAL IDs; FINAL never changes SEARCH state, ranking, patience, or the frozen winner.
+SEARCH runs 38--50 completed candidate iterations, permits up to three invalid or duplicate proposal attempts per iteration, and stops after patience 8. Ranking is SEARCH Macro-F1 descending, SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID ascending. The top-5 SEARCH candidates are frozen as additive `meta_cot` (P0 kept separate). A separately authorized FINAL stage evaluates frozen P0 and all 5 frozen candidates once each on the identical 1,000 FINAL IDs (6,000 calls); FINAL never changes SEARCH state, ranking, patience, or the frozen top-K selection.
 
 The solver is fixed to `gemma-4-26B-A4B-it` with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming responses, and `max_tokens=8192`. Prompt optimization is driven by the `gpt-5.6-sol` proposer at `high` reasoning effort.
 
@@ -28,7 +28,7 @@ Preparation reads a single released SciVer dataset JSON (default `data/sciver/te
 2. Configure `.env` (`API_URL`, `API_KEY`, `PINNED_COMMIT_SHA`, `SCIVER_DATASET_PATH`, `SCIVER_RUN_ID`).
 3. Run the one-request smoke and validate its receipt: `python smoke.py --live-smoke`.
 4. Run SEARCH and monitor until terminal: `python search.py --live-search`.
-5. Run the paired FINAL stage — this freezes the terminal winner, then evaluates frozen P0/P*: `python final.py --live-final`.
+5. Run the paired FINAL stage — this freezes the top-5 candidates, then evaluates frozen P0 and the 5 frozen candidates: `python final.py --live-final`.
 6. Inspect sanitized status and artifacts under `workspace/meta_harness/full_search_v3/<run-id>/`.
 
 ```bash

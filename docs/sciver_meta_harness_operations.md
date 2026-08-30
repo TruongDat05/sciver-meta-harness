@@ -22,13 +22,14 @@ private local dataset path.
   `n=1`, non-streaming, `max_tokens=8192` (override with `SCIVER_SOLVER_MAX_TOKENS`).
 - Proposer: `gpt-5.6-sol` with reasoning effort `high`.
 - Evaluation: canonical P0 plus one valid prompt candidate per SEARCH iteration
-  on the same complete 1,000-record SEARCH split; 15–40 iterations, patience 8,
+  on the same complete 1,000-record SEARCH split; 38–50 iterations, patience 8,
   at most three proposal attempts per iteration. Ranking is SEARCH Macro-F1
   descending, Accuracy descending, prompt SHA-256 ascending, candidate ID
-  ascending. The SEARCH winner is frozen as additive `meta_cot`. FINAL evaluates
-  frozen P0 and frozen P* once each on the identical 1,000 FINAL IDs.
-- Workload ceiling: 41,000 SEARCH evaluations + 2,000 FINAL evaluations
-  (43,000 logical solver evaluations total); transport retries excluded.
+  ascending. The top-5 SEARCH candidates are frozen as additive `meta_cot`
+  (P0 kept separate). FINAL evaluates frozen P0 and all 5 frozen candidates
+  exactly once each on the identical 1,000 FINAL IDs.
+- Workload ceiling: 51,000 SEARCH evaluations + 6,000 FINAL evaluations
+  (57,000 logical solver evaluations total); transport retries excluded.
 
 ## Setup before running
 
@@ -120,7 +121,7 @@ python smoke.py --live-smoke --dataset-path /abs/sciver.json
 python search.py --live-search
 python search.py --live-search --run-id "<run-id>"
 
-# 3. FINAL — requires terminal SEARCH; freezes the winner, then paired P0/P*
+# 3. FINAL — requires terminal SEARCH; freezes top-5, then evaluates P0 + 5 frozen
 python final.py --live-final
 python final.py --live-final --run-id "<run-id>" --dataset-path /abs/sciver.json
 ```
@@ -185,9 +186,10 @@ when you execute their ordered cells:
 2. Live SMOKE (model-list validation + one canonical P0 request) and receipt
    validation.
 3. SEARCH (auto-started or resumed) and status.
-4. Freeze the terminal SEARCH winner.
-5. FINAL preflight, then the paired P0/P* FINAL run and status.
-6. A comparison of baseline (`cot`) vs optimized (`meta_cot`) FINAL results.
+4. Freeze the terminal SEARCH top-5 candidates.
+5. FINAL preflight, then the P0 + top-5 FINAL run and status.
+6. A comparison of baseline (`cot`) vs the frozen `meta_cot` candidates (top-5)
+   FINAL results.
 
 The notebook never changes the checkout, installs dependencies, or persists
 credentials. Run the root launchers instead if you prefer a terminal workflow.

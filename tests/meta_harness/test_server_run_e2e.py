@@ -229,7 +229,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         solver_identity_sha256=SOLVER_IDENTITY,
     )
     assert preflight["resume"] is False
-    assert preflight["workload"]["maximum_search_logical_calls"] == 41000
+    assert preflight["workload"]["maximum_search_logical_calls"] == 51000
 
     with pytest.raises(FinalError, match="frozen winner"):
         server.preflight_server_run_final(
@@ -276,7 +276,7 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         source_commit=COMMIT,
     )
     assert search["search"]["status"] == "patience_stopped"
-    assert proposer.calls == list(range(1, 16))
+    assert proposer.calls == list(range(1, 39))
     assert server.inspect_server_run_status(
         repository_root=tmp_path, run_id=RUN_ID
     )["status"] == "patience_stopped"
@@ -300,10 +300,12 @@ def test_server_interface_end_to_end_with_fake_boundaries(
         solver_identity_sha256=SOLVER_IDENTITY,
     )
     assert frozen["prompt_variant"] == "meta_cot"
+    assert frozen["top_k_count"] == 5
     assert set(final_preflight) == {
         "schema_version", "protocol_id", "run_id", "execution_identity_sha256",
-        "p0_prompt_sha256", "p_star_prompt_sha256",
+        "p0_prompt_sha256", "frozen_top_k",
     }
+    assert len(final_preflight["frozen_top_k"]) == 5
 
     generation = SolverGenerationSettings.from_config(canonical_experiment_config())
     monkeypatch.setattr(
@@ -339,6 +341,6 @@ def test_server_interface_end_to_end_with_fake_boundaries(
     # failure; it must not abort the remaining paired logical workload.
     assert len(interrupted.calls) == 37
     assert len(set(interrupted.calls)) == 37
-    assert final["final"]["logical_calls"] == 2000
+    assert final["final"]["logical_calls"] == 6000
     assert "sample_id" not in json.dumps(final)
     assert "unmistakably-fake-key" not in json.dumps({"prepared": prepared, **final})

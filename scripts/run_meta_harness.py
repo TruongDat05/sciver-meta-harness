@@ -100,7 +100,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     common(search_status)
     activity = subcommands.add_parser("activity", help="inspect run-stage locks")
     common(activity)
-    freeze = subcommands.add_parser("freeze", help="freeze only terminal SEARCH winner")
+    freeze = subcommands.add_parser("freeze", help="freeze only terminal SEARCH top-5 (P0 kept separate)")
     common(freeze)
 
     final_preflight = subcommands.add_parser(

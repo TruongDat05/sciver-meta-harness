@@ -135,11 +135,11 @@ def test_search_preflight_is_dry_run_and_never_constructs_clients(
 
     assert status["operation"] == "search_preflight"
     assert status["resume"] is False
-    assert status["workload"]["maximum_search_logical_calls"] == 41000
+    assert status["workload"]["maximum_search_logical_calls"] == 51000
     assert status["solver"]["identity_sha256"] == SOLVER_IDENTITY
     assert status["solver"]["model"] == "gemma-4-26B-A4B-it"
     assert status["config_sha256"] == (
-        "4ee121a12322871b2c95cec571a1a29142ea99b7f3ab3085a077fe27e4593c4b"
+        "de66f778339d8dd19520fbbf258b7292c0378b8f47fa5fc613db7d33ef4a621f"
     )
     assert set(status["checkpoints"]) == {
         "smoke_receipt_path",
@@ -594,12 +594,14 @@ def test_activity_inspection_is_read_only_and_reports_held_run_lock(tmp_path):
 
 def test_freeze_delegates_to_m5(monkeypatch, tmp_path):
     artifact = {
-        "schema_version": "sciver_full_search_v3_freeze_v1",
+        "schema_version": "sciver_full_search_v3_freeze_v2",
         "run_id": RUN_ID,
         "prompt_variant": "meta_cot",
-        "winner": {"candidate_id": "cot"},
+        "top_k": [
+            {"rank": 1, "candidate_id": "candidate_001", "prompt_sha256": "e" * 64},
+            {"rank": 2, "candidate_id": "candidate_002", "prompt_sha256": "e" * 64},
+        ],
         "artifact_sha256": "f" * 64,
-        "hashes": {"prompt_sha256": "e" * 64},
     }
     monkeypatch.setattr(server, "freeze_experiment_winner", lambda **_kwargs: artifact)
 
@@ -607,6 +609,8 @@ def test_freeze_delegates_to_m5(monkeypatch, tmp_path):
 
     assert status["operation"] == "freeze"
     assert status["prompt_variant"] == "meta_cot"
+    assert status["top_k_count"] == 2
+    assert status["top_k"][0]["candidate_id"] == "candidate_001"
 
 
 def test_final_preflight_delegates_without_constructing_solver(monkeypatch, tmp_path):
@@ -651,11 +655,15 @@ def test_final_start_and_status_delegate_without_exposing_private_records(monkey
     private_records = [{"sample_id": "private-only"}]
     receipt = {
         "status": "complete",
-        "logical_calls": 2000,
+        "logical_calls": 6000,
         "identity_sha256": "c" * 64,
         "variants": [
             {"prompt_variant": "cot", "candidate_id": "cot", "prompt_sha256": "d" * 64, "completed_request_count": 1000, "completed_request_hashes_sha256": "a" * 64},
             {"prompt_variant": "meta_cot", "candidate_id": "candidate_001", "prompt_sha256": "e" * 64, "completed_request_count": 1000, "completed_request_hashes_sha256": "b" * 64},
+            {"prompt_variant": "meta_cot", "candidate_id": "candidate_002", "prompt_sha256": "e2" * 32, "completed_request_count": 1000, "completed_request_hashes_sha256": "b2" * 32},
+            {"prompt_variant": "meta_cot", "candidate_id": "candidate_003", "prompt_sha256": "e3" * 32, "completed_request_count": 1000, "completed_request_hashes_sha256": "b3" * 32},
+            {"prompt_variant": "meta_cot", "candidate_id": "candidate_004", "prompt_sha256": "e4" * 32, "completed_request_count": 1000, "completed_request_hashes_sha256": "b4" * 32},
+            {"prompt_variant": "meta_cot", "candidate_id": "candidate_005", "prompt_sha256": "e5" * 32, "completed_request_count": 1000, "completed_request_hashes_sha256": "b5" * 32},
         ],
     }
     called = {}
@@ -681,13 +689,17 @@ def test_final_start_and_status_delegate_without_exposing_private_records(monkey
     )
 
     assert called["final_records"] is private_records
-    assert result["final"]["logical_calls"] == 2000
+    assert result["final"]["logical_calls"] == 6000
     assert "private-only" not in str(result)
     assert "not-a-real-key" not in str(result)
 
     receipt_path = tmp_path / "receipt.json"
     receipt_path.touch()
+    state_path = tmp_path / "final_state.json"
+    state_path.touch()
     monkeypatch.setattr(server, "final_evaluation_completion_receipt_path", lambda *_args: receipt_path)
-    monkeypatch.setattr(server, "load_final_evaluation_completion_receipt", lambda _path: receipt)
+    monkeypatch.setattr(server, "final_evaluation_state_path", lambda *_args: state_path)
+    monkeypatch.setattr(server, "load_final_evaluation_state", lambda _path: {"status": "complete", "identity": {}})
+    monkeypatch.setattr(server, "load_bound_final_evaluation_completion_receipt", lambda _path, _state: receipt)
     inspected = server.inspect_server_run_final_status(repository_root=tmp_path, run_id=RUN_ID)
     assert inspected == result["final"]

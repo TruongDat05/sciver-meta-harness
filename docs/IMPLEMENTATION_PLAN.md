@@ -19,9 +19,9 @@ This is the normative specification for the SciVer-only `sciver_full_search_v3` 
 - Select exactly 2,000 SciVer samples with seed 42: exactly 1,000 SEARCH and 1,000 FINAL records. The splits are paper-disjoint and selection is independent of labels, predictions, difficulty, baseline errors, and model-derived signals. Preparation fails if exact counts are impossible.
 - The solver is `gemma-4-26B-A4B-it`, with `temperature=0`, `top_p=1`, seed 42, `n=1`, non-streaming output, and `max_tokens=8192`.
 - Canonical P0 and each valid candidate use the same complete immutable ordered 1,000-record SEARCH split. A candidate has exactly `direct`, `analytical`, `parallel`, and `sequential`; only their text changes. Prompt interfaces, answer format, parser, labels, claims, context, captions, image count/order, model, and generation semantics remain fixed.
-- Propose one candidate per iteration. Complete 15--40 candidate iterations, permitting at most three invalid or duplicate proposals per iteration. Rejected proposals dispatch no solver request. Stop after eight consecutive completed iterations without a metric improvement, never before iteration 15.
+- Propose one candidate per iteration. Complete 38--50 candidate iterations, permitting at most three invalid or duplicate proposals per iteration. Rejected proposals dispatch no solver request. Stop after eight consecutive completed iterations without a metric improvement, never before iteration 38.
 - Rank P0 and eligible candidates by SEARCH Macro-F1 descending, SEARCH Accuracy descending, prompt SHA-256 ascending, then candidate ID ascending. Only Macro-F1 improvement, or Accuracy improvement when Macro-F1 ties, resets patience; a hash/ID-only winner change does not.
-- Maximum logical workload is 41,000 SEARCH evaluations (1,000 P0 plus 40,000 candidate) and 2,000 FINAL evaluations (1,000 each for P0 and P*): 43,000 total. Transport retries are excluded.
+- Maximum logical workload is 51,000 SEARCH evaluations (1,000 P0 plus 50,000 candidate) and 6,000 FINAL evaluations (1,000 for P0 plus 1,000 each for the 5 frozen candidates): 57,000 total. Transport retries are excluded.
 
 ## Execution lifecycle
 
@@ -29,11 +29,11 @@ This is the normative specification for the SciVer-only `sciver_full_search_v3` 
 2. Run offline SEARCH preflight without credentials, live client, proposer invocation, or HTTP.
 3. Optionally run the explicitly authorized isolated smoke: model-list validation and one canonical P0 SEARCH-safe request.
 4. Explicitly start or resume SEARCH, then inspect status until terminal.
-5. Freeze the terminal SEARCH-only winner as immutable P* / `meta_cot`.
+5. Freeze the terminal SEARCH-only top-5 candidates as immutable `meta_cot` (P0 kept separate).
 6. Run offline FINAL preflight, bound to frozen cross-stage identity.
-7. Explicitly start or resume paired FINAL: frozen P0 once and frozen P* once on identical FINAL IDs.
+7. Explicitly start or resume FINAL: frozen P0 once and each of the 5 frozen candidates once on identical FINAL IDs.
 
-FINAL artifacts, IDs, labels, predictions, traces, metrics, paths, and availability signals are unavailable to the proposer and SEARCH orchestration. FINAL never modifies prompts, rank, patience, SEARCH state, or the frozen winner.
+FINAL artifacts, IDs, labels, predictions, traces, metrics, paths, and availability signals are unavailable to the proposer and SEARCH orchestration. FINAL never modifies prompts, rank, patience, SEARCH state, or the frozen top-K selection.
 
 ## Immutable identity and artifacts
 

@@ -25,6 +25,7 @@ from typing import Any
 from meta_harness.config import (
     EXPERIMENT_FINAL_SIZE,
     EXPERIMENT_PROTOCOL_ID,
+    EXPERIMENT_TOP_K,
     canonical_experiment_config,
 )
 from meta_harness.search_evaluator import (
@@ -68,7 +69,8 @@ from utils.constant import COT_PROMPT
 
 EXPERIMENT_FINAL_PLAN_SCHEMA_VERSION = "sciver_full_search_v3_final_plan_v1"
 EXPERIMENT_FINAL_STATE_SCHEMA_VERSION = "sciver_full_search_v3_final_state_v1"
-EXPERIMENT_FINAL_STATE_VERSION = "sciver_full_search_v3_final_state_v2"
+EXPERIMENT_FINAL_STATE_VERSION = "sciver_full_search_v3_final_state_v3"
+EXPERIMENT_FINAL_VARIANT_COUNT = 1 + EXPERIMENT_TOP_K
 _STATE_FILENAME = "final_state.json"
 _RECEIPT_FILENAME = "completion.json"
 _LOCK_FILENAME = ".final.lock"
@@ -221,7 +223,14 @@ def preflight_final_evaluation(
         "run_id": _run_id(run_id),
         "execution_identity_sha256": _sha256_json(identity),
         "p0_prompt_sha256": identity["p0"]["prompt_sha256"],
-        "p_star_prompt_sha256": identity["p_star"]["prompt_sha256"],
+        "frozen_top_k": [
+            {
+                "rank": rank,
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+            }
+            for rank, entry in enumerate(identity["frozen_top_k"], start=1)
+        ],
     }
 
 
@@ -327,13 +336,7 @@ def execute_final_evaluation(
                 "FINAL state has an incompatible execution identity"
             )
         if receipt_path.exists():
-            receipt = load_final_evaluation_completion_receipt(receipt_path)
-            _validate_receipt_identity(receipt, identity)
-            if state["status"] != "complete":
-                raise FinalIdentityError(
-                    "FINAL completion receipt conflicts with incomplete state"
-                )
-            return receipt
+            return load_bound_final_evaluation_completion_receipt(receipt_path, state)
         if _migrate_zero_completion_legacy_state(state):
             _atomic_replace_json(destination, state)
         frozen = load_experiment_frozen_winner(
@@ -341,16 +344,15 @@ def execute_final_evaluation(
             if frozen_winner_path is not None
             else experiment_frozen_winner_path(repository_root, run_id)
         )
-        prompts = {
-            "cot": COT_PROMPT,
-            "meta_cot": PromptFamily(frozen["templates"]),
-        }
+        prompts = {EXPERIMENT_P0_CANDIDATE_ID: COT_PROMPT}
+        for entry in frozen["top_k"]:
+            prompts[entry["candidate_id"]] = PromptFamily(entry["templates"])
         for variant in state["variants"]:
-            prompt_variant = variant["prompt_variant"]
+            prompt = prompts[variant["candidate_id"]]
             expected_hashes = _final_request_hashes(
                 identity=identity,
                 records=final_records,
-                prompt=prompts[prompt_variant],
+                prompt=prompt,
                 candidate_id=variant["candidate_id"],
             )
             completed_hashes = variant["completed_request_sha256"]
@@ -366,7 +368,7 @@ def execute_final_evaluation(
                 variant=variant,
                 expected_hashes=expected_hashes,
                 records=final_records,
-                prompt=prompts[prompt_variant],
+                prompt=prompt,
                 solver=solver,
                 retry_policy=active_retry_policy,
                 state=state,
@@ -377,7 +379,7 @@ def execute_final_evaluation(
         _atomic_replace_json(destination, state)
         receipt = _completion_receipt(identity, state["variants"])
         _atomic_create_json(receipt_path, receipt)
-    return load_final_evaluation_completion_receipt(receipt_path)
+    return load_bound_final_evaluation_completion_receipt(receipt_path, state)
 
 
 def final_evaluation_state_path(
@@ -420,22 +422,51 @@ def final_evaluation_completion_receipt_path(
 
 
 def load_final_evaluation_completion_receipt(path: str | Path) -> dict[str, Any]:
-    """Load a receipt containing only safe paired-execution identities."""
+    """Structurally load a receipt; identity binding happens against trusted state.
+
+    This standalone path has no trusted execution identity, so it validates only
+    self-contained structure and hashes. It must not be treated as identity
+    verification: authoritative binding is enforced by ``_validate_receipt_identity``
+    against the trusted identity in the resume path.
+    """
 
     receipt = _load_canonical_object(Path(path), "FINAL completion receipt")
     required = {
-        "schema_version", "identity_sha256", "status", "variants", "logical_calls", "receipt_sha256"
+        "schema_version", "identity_sha256", "status", "variants", "contract",
+        "logical_calls", "receipt_sha256",
     }
     if set(receipt) != required or receipt["schema_version"] != EXPERIMENT_FINAL_STATE_SCHEMA_VERSION:
         raise FinalIdentityError("FINAL completion receipt fields are invalid")
-    if receipt["status"] != "complete" or receipt["logical_calls"] != 2 * EXPERIMENT_FINAL_SIZE:
+    if receipt["status"] != "complete" or receipt["logical_calls"] != EXPERIMENT_FINAL_VARIANT_COUNT * EXPERIMENT_FINAL_SIZE:
         raise FinalIdentityError("FINAL completion receipt is incomplete")
     _sha256(receipt["identity_sha256"], "FINAL receipt identity_sha256")
+    _validate_receipt_contract(receipt["contract"])
     _validate_receipt_variants(receipt["variants"])
     expected = _sha256_json({key: value for key, value in receipt.items() if key != "receipt_sha256"})
     if receipt["receipt_sha256"] != expected:
         raise FinalIdentityError("FINAL completion receipt hash is inconsistent")
     return _json_copy(receipt)
+
+
+def load_bound_final_evaluation_completion_receipt(
+    receipt_path: str | Path, state: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Load a receipt structurally and bind it to a trusted FINAL state identity.
+
+    This is the authoritative identity gate shared by the evaluator and the
+    server status path. It requires the FINAL state to be complete and validates
+    the receipt against ``state["identity"]`` (never against the receipt's own
+    self-declared contract), so forged, reordered, substituted, or legacy
+    receipts fail closed even when their ``receipt_sha256`` is recomputed.
+    """
+
+    if state["status"] != "complete":
+        raise FinalIdentityError(
+            "FINAL completion receipt conflicts with incomplete state"
+        )
+    receipt = load_final_evaluation_completion_receipt(receipt_path)
+    _validate_receipt_identity(receipt, state["identity"])
+    return receipt
 
 
 def _build_execution_identity(
@@ -488,11 +519,14 @@ def _build_execution_identity(
             "candidate_id": EXPERIMENT_P0_CANDIDATE_ID,
             "prompt_sha256": canonical_experiment_p0_prompt_sha256(),
         },
-        "p_star": {
-            "candidate_id": frozen["winner"]["candidate_id"],
-            "prompt_sha256": frozen["hashes"]["prompt_sha256"],
-            "prompt_variant": frozen["prompt_variant"],
-        },
+        "frozen_top_k": [
+            {
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+                "prompt_variant": frozen["prompt_variant"],
+            }
+            for entry in frozen["top_k"]
+        ],
     }
     _validate_execution_identity(identity)
     return identity
@@ -593,37 +627,46 @@ def _validate_cross_stage_identity(
     templates = {method: canonical_baseline_sources()[method] for method in TEMPLATE_KEYS}
     if template_source_sha256(templates) != canonical_experiment_p0_prompt_sha256():
         raise FinalError("canonical P0 prompt identity is inconsistent")
-    if frozen["winner"]["candidate_id"] == EXPERIMENT_P0_CANDIDATE_ID:
-        if frozen["hashes"]["prompt_sha256"] != canonical_experiment_p0_prompt_sha256():
-            raise FinalError("frozen P0 winner identity is inconsistent")
-    elif template_source_sha256(PromptFamily(frozen["templates"])) != frozen["hashes"]["prompt_sha256"]:
-        raise FinalError("frozen P* prompt identity is inconsistent")
+    if isinstance(frozen.get("top_k"), list):
+        for entry in frozen["top_k"]:
+            if entry.get("candidate_id") == EXPERIMENT_P0_CANDIDATE_ID:
+                raise FinalError("frozen top-K must not include P0")
+            prompt_identity = entry.get("prompt_sha256")
+            entry_templates = entry.get("templates")
+            if not isinstance(prompt_identity, str) or not isinstance(entry_templates, Mapping):
+                raise FinalError("frozen top-K prompt identity is inconsistent")
+            if template_source_sha256(PromptFamily(entry_templates)) != prompt_identity:
+                raise FinalError("frozen top-K prompt identity is inconsistent")
 
 
 def _planned_state(identity: Mapping[str, Any]) -> dict[str, Any]:
+    variants = [
+        {
+            "prompt_variant": "cot",
+            "candidate_id": identity["p0"]["candidate_id"],
+            "prompt_sha256": identity["p0"]["prompt_sha256"],
+            "completed_request_sha256": [],
+            "outcomes": _empty_final_accounting(),
+            "metrics": _metrics_from_final_accounting(_empty_final_accounting()),
+        }
+    ]
+    for entry in identity["frozen_top_k"]:
+        variants.append(
+            {
+                "prompt_variant": entry["prompt_variant"],
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+                "completed_request_sha256": [],
+                "outcomes": _empty_final_accounting(),
+                "metrics": _metrics_from_final_accounting(_empty_final_accounting()),
+            }
+        )
     payload = {
         "schema_version": EXPERIMENT_FINAL_STATE_SCHEMA_VERSION,
         "state_version": EXPERIMENT_FINAL_STATE_VERSION,
         "identity": _json_copy(identity),
         "status": "planned",
-        "variants": [
-            {
-                "prompt_variant": "cot",
-                "candidate_id": identity["p0"]["candidate_id"],
-                "prompt_sha256": identity["p0"]["prompt_sha256"],
-                "completed_request_sha256": [],
-                "outcomes": _empty_final_accounting(),
-                "metrics": _metrics_from_final_accounting(_empty_final_accounting()),
-            },
-            {
-                "prompt_variant": "meta_cot",
-                "candidate_id": identity["p_star"]["candidate_id"],
-                "prompt_sha256": identity["p_star"]["prompt_sha256"],
-                "completed_request_sha256": [],
-                "outcomes": _empty_final_accounting(),
-                "metrics": _metrics_from_final_accounting(_empty_final_accounting()),
-            },
-        ],
+        "variants": variants,
     }
     return {**payload, "state_sha256": _sha256_json(payload)}
 
@@ -745,24 +788,40 @@ def _validate_execution_identity(value: Any) -> None:
     required = {
         "protocol_id", "run_id", "config_sha256", "split_sha256", "final_membership_commitment",
         "final_record_order_sha256", "final_size", "frozen_winner_artifact_sha256",
-        "search_run_identity_sha256", "solver", "p0", "p_star",
+        "search_run_identity_sha256", "solver", "p0", "frozen_top_k",
     }
     if not isinstance(value, Mapping) or set(value) != required:
         raise FinalIdentityError("FINAL execution identity fields are invalid")
     if value["protocol_id"] != EXPERIMENT_PROTOCOL_ID or value["final_size"] != EXPERIMENT_FINAL_SIZE:
         raise FinalIdentityError("FINAL execution identity is incompatible")
     _run_id(value["run_id"])
-    for field in required - {"protocol_id", "run_id", "final_size", "solver", "p0", "p_star"}:
+    for field in required - {"protocol_id", "run_id", "final_size", "solver", "p0", "frozen_top_k"}:
         _sha256(value[field], f"FINAL identity {field}")
     contract = FinalSolverContract(**value["solver"])
     _validate_prompt_identity(value["p0"], EXPERIMENT_P0_CANDIDATE_ID)
-    _validate_prompt_identity(value["p_star"], None)
-    if value["p0"]["prompt_sha256"] != canonical_experiment_p0_prompt_sha256() or value[
-        "p_star"
-    ]["prompt_variant"] != "meta_cot":
+    _validate_frozen_top_k_identity(value["frozen_top_k"])
+    if value["p0"]["prompt_sha256"] != canonical_experiment_p0_prompt_sha256():
         raise FinalIdentityError("FINAL prompt identities are incompatible")
     if not isinstance(contract, FinalSolverContract):
         raise AssertionError("validated contract unexpectedly has the wrong type")
+
+
+def _validate_frozen_top_k_identity(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != EXPERIMENT_TOP_K:
+        raise FinalIdentityError("FINAL frozen top-K identity is invalid")
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "candidate_id", "prompt_sha256", "prompt_variant",
+        }:
+            raise FinalIdentityError("FINAL frozen top-K identity is invalid")
+        candidate_id = _identifier(entry["candidate_id"])
+        if candidate_id == EXPERIMENT_P0_CANDIDATE_ID or candidate_id in seen:
+            raise FinalIdentityError("FINAL frozen top-K identity is invalid")
+        seen.add(candidate_id)
+        _sha256(entry["prompt_sha256"], "FINAL frozen prompt_sha256")
+        if entry["prompt_variant"] != "meta_cot":
+            raise FinalIdentityError("FINAL frozen prompt variant is invalid")
 
 
 def _validate_prompt_identity(value: Any, candidate_id: str | None) -> None:
@@ -783,16 +842,19 @@ def _validate_variants(value: Any, identity: Mapping[str, Any]) -> None:
             "prompt_variant": "cot",
             **identity["p0"],
             "completed_request_sha256": None,
-        },
-        {
-            "prompt_variant": "meta_cot",
-            "candidate_id": identity["p_star"]["candidate_id"],
-            "prompt_sha256": identity["p_star"]["prompt_sha256"],
-            "completed_request_sha256": None,
-        },
+        }
     ]
-    if not isinstance(value, list) or len(value) != 2:
-        raise FinalIdentityError("FINAL paired variants are incompatible")
+    for entry in identity["frozen_top_k"]:
+        expected.append(
+            {
+                "prompt_variant": entry["prompt_variant"],
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+                "completed_request_sha256": None,
+            }
+        )
+    if not isinstance(value, list) or len(value) != EXPERIMENT_FINAL_VARIANT_COUNT:
+        raise FinalIdentityError("FINAL frozen variants are incompatible")
     for actual, template in zip(value, expected):
         completed = actual.get("completed_request_sha256") if isinstance(actual, Mapping) else None
         extra = (
@@ -991,6 +1053,7 @@ def _validate_safe_final_outcome_counts(value: Any) -> None:
 def _completion_receipt(
     identity: Mapping[str, Any], variants: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
+    contract = _receipt_contract(identity)
     receipt_variants = [
         {
             "prompt_variant": variant["prompt_variant"],
@@ -1005,20 +1068,61 @@ def _completion_receipt(
         }
         for variant in variants
     ]
+    _validate_receipt_variants_against_identity(receipt_variants, contract)
     payload = {
         "schema_version": EXPERIMENT_FINAL_STATE_SCHEMA_VERSION,
         "identity_sha256": _sha256_json(identity),
         "status": "complete",
         "variants": receipt_variants,
-        "logical_calls": 2 * EXPERIMENT_FINAL_SIZE,
+        "contract": contract,
+        "logical_calls": EXPERIMENT_FINAL_VARIANT_COUNT * EXPERIMENT_FINAL_SIZE,
     }
     return {**payload, "receipt_sha256": _sha256_json(payload)}
 
 
+def _receipt_contract(identity: Mapping[str, Any]) -> list[dict[str, str]]:
+    contract = [
+        {
+            "prompt_variant": "cot",
+            "candidate_id": identity["p0"]["candidate_id"],
+            "prompt_sha256": identity["p0"]["prompt_sha256"],
+        }
+    ]
+    for entry in identity["frozen_top_k"]:
+        contract.append(
+            {
+                "prompt_variant": entry["prompt_variant"],
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+            }
+        )
+    return contract
+
+
+def _validate_receipt_contract(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != EXPERIMENT_FINAL_VARIANT_COUNT:
+        raise FinalIdentityError("FINAL receipt contract is invalid")
+    expected_names = ("cot",) + ("meta_cot",) * EXPERIMENT_TOP_K
+    seen: set[str] = set()
+    for entry, expected_name in zip(value, expected_names):
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "prompt_variant", "candidate_id", "prompt_sha256",
+        }:
+            raise FinalIdentityError("FINAL receipt contract is invalid")
+        candidate_id = entry["candidate_id"]
+        if entry["prompt_variant"] != expected_name or not isinstance(candidate_id, str) or not candidate_id:
+            raise FinalIdentityError("FINAL receipt contract is invalid")
+        if expected_name != "cot" and candidate_id in seen:
+            raise FinalIdentityError("FINAL receipt contract is invalid")
+        if expected_name != "cot":
+            seen.add(candidate_id)
+        _sha256(entry["prompt_sha256"], "FINAL receipt contract prompt_sha256")
+
+
 def _validate_receipt_variants(value: Any) -> None:
-    if not isinstance(value, list) or len(value) != 2:
+    if not isinstance(value, list) or len(value) != EXPERIMENT_FINAL_VARIANT_COUNT:
         raise FinalIdentityError("FINAL receipt variants are invalid")
-    expected_names = ("cot", "meta_cot")
+    expected_names = ("cot",) + ("meta_cot",) * EXPERIMENT_TOP_K
     for variant, expected_name in zip(value, expected_names):
         required = {
             "prompt_variant", "candidate_id", "prompt_sha256", "completed_request_count", "completed_request_hashes_sha256"
@@ -1038,9 +1142,40 @@ def _validate_receipt_variants(value: Any) -> None:
             _validate_safe_final_outcome_counts(variant["outcomes"])
 
 
+def _validate_receipt_variants_against_identity(
+    value: Any, contract: Sequence[Mapping[str, Any]]
+) -> None:
+    """Require receipt variants to exactly match a trusted derived contract."""
+    _validate_receipt_contract(contract)
+    _validate_receipt_variants(value)
+    for variant, expected in zip(value, contract):
+        if (
+            variant["prompt_variant"] != expected["prompt_variant"]
+            or variant["candidate_id"] != expected["candidate_id"]
+            or variant["prompt_sha256"] != expected["prompt_sha256"]
+        ):
+            raise FinalIdentityError(
+                "FINAL receipt variants are not bound to execution identity"
+            )
+
+
 def _validate_receipt_identity(receipt: Mapping[str, Any], identity: Mapping[str, Any]) -> None:
+    """Bind a receipt to the trusted execution identity, never to itself."""
     if receipt["identity_sha256"] != _sha256_json(identity):
         raise FinalIdentityError("FINAL completion receipt identity is incompatible")
+    expected_contract = _receipt_contract(identity)
+    canonical_p0 = {
+        "prompt_variant": "cot",
+        "candidate_id": EXPERIMENT_P0_CANDIDATE_ID,
+        "prompt_sha256": canonical_experiment_p0_prompt_sha256(),
+    }
+    if expected_contract[0] != canonical_p0:
+        raise FinalIdentityError("FINAL receipt P0 identity is inconsistent")
+    if receipt["contract"] != expected_contract:
+        raise FinalIdentityError(
+            "FINAL receipt contract is not bound to execution identity"
+        )
+    _validate_receipt_variants_against_identity(receipt["variants"], expected_contract)
 
 
 def _refresh_state_hash(state: dict[str, Any]) -> None:
@@ -1173,6 +1308,7 @@ __all__ = [
     "final_evaluation_completion_receipt_path",
     "final_evaluation_state_path",
     "initialize_final_evaluation",
+    "load_bound_final_evaluation_completion_receipt",
     "load_final_evaluation_completion_receipt",
     "load_final_evaluation_state",
     "preflight_final_evaluation",

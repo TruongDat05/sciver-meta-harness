@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from meta_harness.config import (
     MetaHarnessConfigError,
     canonical_experiment_config,
 )
+from meta_harness.prompt_family import canonical_json
 from meta_harness.records import (
     DataError,
     SplitError,
@@ -45,9 +47,10 @@ def test_canonical_v3_configuration_is_complete_and_locked():
         "final_size": 1000,
         "split_seed": 42,
         "candidate_count_per_iteration": 1,
-        "min_iterations": 15,
-        "max_iterations": 40,
+        "min_iterations": 38,
+        "max_iterations": 50,
         "patience": 8,
+        "top_k": 5,
         "proposal_attempts": 3,
         "solver": {
             "model": "gemma-4-26B-A4B-it",
@@ -69,6 +72,13 @@ def test_changed_v3_configuration_invariant_is_rejected():
         Config.from_mapping(values)
 
 
+def test_top_k_is_part_of_the_locked_protocol_identity():
+    config = canonical_experiment_config()
+    assert config.top_k == 5
+    assert config.as_dict()["top_k"] == 5
+    assert Config.from_mapping(config.as_dict()).top_k == 5
+
+
 def test_previous_solver_model_is_not_resume_compatible():
     values = canonical_experiment_config().as_dict()
     current_identity = canonical_experiment_config().sha256()
@@ -77,7 +87,7 @@ def test_previous_solver_model_is_not_resume_compatible():
     with pytest.raises(MetaHarnessConfigError, match="solver_model is locked"):
         Config.from_mapping(values)
 
-    assert current_identity == "4ee121a12322871b2c95cec571a1a29142ea99b7f3ab3085a077fe27e4593c4b"
+    assert current_identity == "de66f778339d8dd19520fbbf258b7292c0378b8f47fa5fc613db7d33ef4a621f"
     assert current_identity != "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
 
 
@@ -155,6 +165,41 @@ def test_released_v3_split_is_exact_disjoint_and_order_independent(released_reco
         first["FINAL"]["paper_identities"]
     )
     verify_experiment_split(first, released_records)
+
+
+def _ordered_membership_sha256(sample_ids):
+    return hashlib.sha256(canonical_json(list(sample_ids)).encode("utf-8")).hexdigest()
+
+
+def test_split_ordered_membership_matches_locked_baseline(released_records):
+    split = build_experiment_split(released_records)
+    assert _ordered_membership_sha256(split["SEARCH"]["sample_ids"]) == (
+        "06a13565c09525fec5158d0bdb4b0fedebd1429848ed4f1e402b4606d69b5897"
+    )
+    assert _ordered_membership_sha256(split["FINAL"]["sample_ids"]) == (
+        "2aa69939d3cf45a246fdd6e8cdf31b7cf4d0a579108d8a2e0f906e6509cde536"
+    )
+    assert _ordered_membership_sha256(split["SEARCH"]["paper_identities"]) == (
+        "c49cce779ab37c5da2ecb4cdfedf4dbb9e049a6c1033dfc513810b3f31ec9b82"
+    )
+    assert _ordered_membership_sha256(split["FINAL"]["paper_identities"]) == (
+        "98311490ab1fed4a16d762f40c6d6bed5bee45bf0716ce78d2673526c2e49e93"
+    )
+
+
+def test_split_membership_identity_is_distinct_from_config_and_split_hashes(
+    released_records,
+):
+    split = build_experiment_split(released_records)
+    released_ids = {record.sample_id for record in released_records}
+
+    search_ids = set(split["SEARCH"]["sample_ids"])
+    final_ids = set(split["FINAL"]["sample_ids"])
+    assert search_ids | final_ids == released_ids
+    assert not search_ids & final_ids
+    assert len(search_ids) + len(final_ids) == 2000
+    assert split["config_sha256"] and split["split_sha256"]
+    assert split["split_sha256"] != split["config_sha256"]
 
 
 def test_infeasible_paper_exclusive_allocation_fails_explicitly():

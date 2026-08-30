@@ -10,7 +10,10 @@ from types import MappingProxyType
 
 import pytest
 
+import meta_harness.final_evaluation as final_module
+
 from meta_harness.config import (
+    EXPERIMENT_FINAL_SIZE,
     EXPERIMENT_PROTOCOL_ID,
     EXPERIMENT_SEARCH_SIZE,
     canonical_experiment_config,
@@ -25,10 +28,12 @@ from meta_harness.search_evaluator import (
 )
 from meta_harness.final_evaluation import (
     FinalError,
+    FinalIdentityError,
     FinalSolverContract,
     account_final_evaluation_outcomes,
     canonical_final_evaluation_solver_contract,
     execute_final_evaluation,
+    final_evaluation_completion_receipt_path,
     final_evaluation_state_path,
     initialize_final_evaluation,
     load_final_evaluation_state,
@@ -267,8 +272,9 @@ def test_preflight_and_authorized_initialization_are_isolated_and_resumable(
     assert dry_run["run_id"] == RUN_ID
     assert set(dry_run) == {
         "schema_version", "protocol_id", "run_id", "execution_identity_sha256",
-        "p0_prompt_sha256", "p_star_prompt_sha256",
+        "p0_prompt_sha256", "frozen_top_k",
     }
+    assert len(dry_run["frozen_top_k"]) == 5
     state = initialize_final_evaluation(
         repository_root=final_inputs["root"],
         run_id=RUN_ID,
@@ -384,7 +390,7 @@ def test_final_execution_retries_and_persists_only_aggregate_metrics(final_input
     state = load_final_evaluation_state(
         final_evaluation_state_path(final_inputs["root"], RUN_ID)
     )
-    assert solver.calls == 2001
+    assert solver.calls == 6001
     for variant in state["variants"]:
         assert variant["metrics"]["parse_coverage"] == 1.0
         assert variant["metrics"]["accuracy"] is not None
@@ -523,3 +529,328 @@ def test_search_modules_do_not_import_the_private_final_loader():
     ):
         source = (root / relative_path).read_text(encoding="utf-8")
         assert "load_trusted_experiment_private_manifest" not in source
+
+
+def _final_receipt(module, identity):
+    variants = module._planned_state(identity)["variants"]
+    filled = []
+    for variant in variants:
+        accounting = {
+            "confusion": {
+                "yes": {"yes": EXPERIMENT_FINAL_SIZE, "no": 0},
+                "no": {"yes": 0, "no": 0},
+            },
+            "label_support": {"yes": EXPERIMENT_FINAL_SIZE, "no": 0},
+            "parsed_predictions": EXPERIMENT_FINAL_SIZE,
+            "abstentions_or_parse_failures": 0,
+            "infrastructure_failures": 0,
+        }
+        item = dict(variant)
+        item["completed_request_sha256"] = [f"{i:064x}" for i in range(EXPERIMENT_FINAL_SIZE)]
+        item["outcomes"] = accounting
+        item["metrics"] = module._metrics_from_final_accounting(accounting)
+        filled.append(item)
+    return module._completion_receipt(identity, filled)
+
+
+def _rewrite_receipt(path, receipt):
+    receipt["receipt_sha256"] = hashlib.sha256(
+        canonical_json(
+            {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_text(canonical_json(receipt), encoding="utf-8")
+    return path
+
+
+def _recompute_receipt_hash(receipt):
+    receipt["receipt_sha256"] = hashlib.sha256(
+        canonical_json(
+            {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+        ).encode("utf-8")
+    ).hexdigest()
+    return receipt
+
+
+def _receipt_identity(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    return final_module._build_execution_identity(
+        repository_root=final_inputs["root"],
+        run_id=RUN_ID,
+        frozen_winner_path=None,
+        private_manifest_path=final_inputs["private_path"],
+        search_safe_manifest_path=final_inputs["safe_path"],
+        final_records=final_inputs["records"],
+        solver_contract=final_inputs["contract"],
+    )
+
+
+def test_valid_receipt_loads_and_validates_against_trusted_identity(
+    final_inputs, tmp_path
+):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    path = _rewrite_receipt(tmp_path / "completion.json", receipt)
+
+    loaded = final_module.load_final_evaluation_completion_receipt(path)
+    assert loaded["status"] == "complete"
+    final_module._validate_receipt_identity(loaded, identity)
+    assert receipt == _final_receipt(final_module, identity)
+
+
+def test_receipt_rejects_contract_and_variants_tampered_together(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    receipt["variants"][1]["candidate_id"] = "forged_001"
+    receipt["variants"][1]["prompt_sha256"] = "f" * 64
+    receipt["contract"][1]["candidate_id"] = "forged_001"
+    receipt["contract"][1]["prompt_sha256"] = "f" * 64
+    _recompute_receipt_hash(receipt)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module._validate_receipt_identity(receipt, identity)
+
+
+def test_receipt_rejects_forged_p0_identity(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    receipt["variants"][0]["prompt_sha256"] = "f" * 64
+    receipt["contract"][0]["prompt_sha256"] = "f" * 64
+    _recompute_receipt_hash(receipt)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module._validate_receipt_identity(receipt, identity)
+
+
+def test_receipt_rejects_cot_duplicated_inside_top_k(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    receipt["variants"][1] = dict(receipt["variants"][0])
+    receipt["variants"][1]["completed_request_count"] = EXPERIMENT_FINAL_SIZE
+    receipt["contract"][1] = dict(receipt["contract"][0])
+    _recompute_receipt_hash(receipt)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module._validate_receipt_identity(receipt, identity)
+
+
+def test_receipt_rejects_reordered_top_k_in_contract_and_variants(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    receipt["variants"][1], receipt["variants"][2] = receipt["variants"][2], receipt["variants"][1]
+    receipt["contract"][1], receipt["contract"][2] = receipt["contract"][2], receipt["contract"][1]
+    _recompute_receipt_hash(receipt)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module._validate_receipt_identity(receipt, identity)
+
+
+def test_receipt_rejects_substituted_top_k_in_contract_and_variants(final_inputs):
+    import meta_harness.final_evaluation as final_module
+
+    identity = _receipt_identity(final_inputs)
+    receipt = _final_receipt(final_module, identity)
+    receipt["variants"][2]["candidate_id"] = "candidate_999"
+    receipt["variants"][2]["prompt_sha256"] = "f" * 64
+    receipt["contract"][2]["candidate_id"] = "candidate_999"
+    receipt["contract"][2]["prompt_sha256"] = "f" * 64
+    _recompute_receipt_hash(receipt)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module._validate_receipt_identity(receipt, identity)
+
+
+def _filled_final_variants(module, identity):
+    variants = module._planned_state(identity)["variants"]
+    filled = []
+    for variant in variants:
+        accounting = {
+            "confusion": {
+                "yes": {"yes": EXPERIMENT_FINAL_SIZE, "no": 0},
+                "no": {"yes": 0, "no": 0},
+            },
+            "label_support": {"yes": EXPERIMENT_FINAL_SIZE, "no": 0},
+            "parsed_predictions": EXPERIMENT_FINAL_SIZE,
+            "abstentions_or_parse_failures": 0,
+            "infrastructure_failures": 0,
+        }
+        item = dict(variant)
+        item["completed_request_sha256"] = [
+            f"{i:064x}" for i in range(EXPERIMENT_FINAL_SIZE)
+        ]
+        item["outcomes"] = accounting
+        item["metrics"] = module._metrics_from_final_accounting(accounting)
+        filled.append(item)
+    return filled
+
+
+def _write_final_run(repo, final_inputs, *, status="complete", forged=False, include_state=True):
+    module = final_module
+    identity = _receipt_identity(final_inputs)
+    variants = _filled_final_variants(module, identity)
+    if include_state:
+        state = {
+            "schema_version": module.EXPERIMENT_FINAL_STATE_SCHEMA_VERSION,
+            "state_version": module.EXPERIMENT_FINAL_STATE_VERSION,
+            "identity": identity,
+            "status": status,
+            "variants": variants,
+        }
+        module._refresh_state_hash(state)
+        state_path = final_evaluation_state_path(repo, RUN_ID)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(canonical_json(state), encoding="utf-8")
+    receipt = module._completion_receipt(identity, variants)
+    if forged:
+        receipt["variants"][1]["candidate_id"] = "forged_001"
+        receipt["variants"][1]["prompt_sha256"] = "f" * 64
+        receipt["contract"][1]["candidate_id"] = "forged_001"
+        receipt["contract"][1]["prompt_sha256"] = "f" * 64
+        _recompute_receipt_hash(receipt)
+    receipt_path = final_evaluation_completion_receipt_path(repo, RUN_ID)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(canonical_json(receipt), encoding="utf-8")
+
+
+def test_inspect_rejects_forged_receipt_with_complete_state(final_inputs, tmp_path):
+    import meta_harness.server_run as server
+
+    _write_final_run(tmp_path, final_inputs, forged=True)
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        server.inspect_server_run_final_status(
+            repository_root=tmp_path, run_id=RUN_ID
+        )
+
+
+def test_inspect_rejects_receipt_when_state_is_missing(final_inputs, tmp_path):
+    import meta_harness.server_run as server
+
+    _write_final_run(tmp_path, final_inputs, include_state=False)
+
+    with pytest.raises(server.ServerError, match="missing"):
+        server.inspect_server_run_final_status(
+            repository_root=tmp_path, run_id=RUN_ID
+        )
+
+
+def test_inspect_rejects_receipt_when_state_is_incomplete(final_inputs, tmp_path):
+    import meta_harness.server_run as server
+
+    _write_final_run(tmp_path, final_inputs, status="running")
+
+    with pytest.raises(FinalIdentityError, match="incomplete"):
+        server.inspect_server_run_final_status(
+            repository_root=tmp_path, run_id=RUN_ID
+        )
+
+
+def test_inspect_reports_complete_deterministically_with_valid_state(
+    final_inputs, tmp_path
+):
+    import meta_harness.server_run as server
+
+    _write_final_run(tmp_path, final_inputs)
+
+    first = server.inspect_server_run_final_status(
+        repository_root=tmp_path, run_id=RUN_ID
+    )
+    second = server.inspect_server_run_final_status(
+        repository_root=tmp_path, run_id=RUN_ID
+    )
+
+    assert first == second
+    assert first["status"] == "complete"
+    assert first["logical_calls"] == 6000
+
+
+def _ok_solver():
+    return type("_Ok", (), {"complete": lambda self, request: SolverResult(content="Answer: yes")})()
+
+
+def test_newly_created_receipt_is_identity_bound_before_return(
+    final_inputs, monkeypatch
+):
+    real_atomic_create = final_module._atomic_create_json
+
+    def forging_create(path, value):
+        real_atomic_create(path, value)
+        if Path(path).name == "completion.json":
+            forged = json.loads(Path(path).read_text(encoding="utf-8"))
+            forged["variants"][1]["candidate_id"] = "forged_001"
+            forged["variants"][1]["prompt_sha256"] = "f" * 64
+            forged["contract"][1]["candidate_id"] = "forged_001"
+            forged["contract"][1]["prompt_sha256"] = "f" * 64
+            _recompute_receipt_hash(forged)
+            Path(path).write_text(canonical_json(forged), encoding="utf-8")
+
+    monkeypatch.setattr(final_module, "_atomic_create_json", forging_create)
+    monkeypatch.setattr(
+        final_module,
+        "_atomic_replace_json",
+        lambda path, value: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            or Path(path).write_text(canonical_json(value), encoding="utf-8")
+        ),
+    )
+    monkeypatch.setattr(
+        final_module,
+        "build_solver_request",
+        lambda record, prompt: SolverRequest(
+            model=canonical_experiment_config().solver_model,
+            messages=({"role": "user", "content": "offline return path"},),
+            generation=SolverGenerationSettings.from_config(
+                canonical_experiment_config()
+            ),
+        ),
+    )
+
+    with pytest.raises(FinalIdentityError, match="identity"):
+        final_module.execute_final_evaluation(
+            repository_root=final_inputs["root"],
+            run_id=RUN_ID,
+            frozen_winner_path=None,
+            private_manifest_path=final_inputs["private_path"],
+            search_safe_manifest_path=final_inputs["safe_path"],
+            final_records=final_inputs["records"],
+            solver_contract=final_inputs["contract"],
+            solver=_ok_solver(),
+            authorize_final_execution=True,
+        )
+
+
+def test_existing_receipt_resume_validates_through_trusted_identity(
+    final_inputs, tmp_path
+):
+    import meta_harness.final_evaluation as final_module
+
+    _write_final_run(final_inputs["root"], final_inputs)
+
+    class Boom:
+        def complete(self, _request):
+            pytest.fail("resume redispatched completed work")
+
+    receipt = final_module.execute_final_evaluation(
+        repository_root=final_inputs["root"],
+        run_id=RUN_ID,
+        frozen_winner_path=None,
+        private_manifest_path=final_inputs["private_path"],
+        search_safe_manifest_path=final_inputs["safe_path"],
+        final_records=final_inputs["records"],
+        solver_contract=final_inputs["contract"],
+        solver=Boom(),
+        authorize_final_execution=True,
+    )
+
+    assert receipt["status"] == "complete"

@@ -146,9 +146,9 @@ def test_p0_completes_before_one_candidate_per_completed_iteration(tmp_path):
     state = orchestration.run()
 
     assert evaluator.p0_calls and proposer.calls
-    assert len(proposer.calls) == len(evaluator.candidate_calls) == 15
+    assert len(proposer.calls) == len(evaluator.candidate_calls) == 38
     assert state["status"] == "patience_stopped"
-    assert [entry["iteration"] for entry in state["iterations"]] == list(range(1, 16))
+    assert [entry["iteration"] for entry in state["iterations"]] == list(range(1, 39))
     assert all(entry["candidate"] is not None for entry in state["iterations"])
 
 
@@ -175,14 +175,14 @@ def test_invalid_exhausted_proposal_has_zero_candidate_evaluations(tmp_path):
     assert evaluator.candidate_calls == []
 
 
-def test_no_early_stop_before_15_and_patience_stops_at_8_after_minimum(tmp_path):
+def test_no_early_stop_before_38_and_patience_stops_at_8_after_minimum(tmp_path):
     proposer = FakeProposer()
     evaluator = FakeEvaluator(p0_metrics=(0.9, 0.9))
 
     state = _orchestrator(tmp_path, proposer, evaluator).run()
 
-    assert len(state["iterations"]) == 15
-    assert state["patience"]["consecutive_non_improving"] == 15
+    assert len(state["iterations"]) == 38
+    assert state["patience"]["consecutive_non_improving"] == 38
     assert state["status"] == "patience_stopped"
 
 
@@ -197,7 +197,7 @@ def test_metric_improvement_resets_patience(tmp_path):
 
     state = _orchestrator(tmp_path, proposer, evaluator).run()
 
-    assert len(state["iterations"]) == 16
+    assert len(state["iterations"]) == 38
     assert state["iterations"][7]["metric_improved"] is True
     assert state["status"] == "patience_stopped"
 
@@ -214,10 +214,10 @@ def test_hash_only_winner_change_does_not_reset_patience(tmp_path):
 
     assert state["winner_id"] != EXPERIMENT_P0_CANDIDATE_ID
     assert state["iterations"][0]["metric_improved"] is False
-    assert state["patience"]["consecutive_non_improving"] == 15
+    assert state["patience"]["consecutive_non_improving"] == 38
 
 
-def test_hard_maximum_stops_at_40_completed_iterations(tmp_path):
+def test_hard_maximum_stops_at_50_completed_iterations(tmp_path):
     proposer = FakeProposer()
     evaluator = FakeEvaluator(
         p0_metrics=(0.5, 0.5),
@@ -227,7 +227,7 @@ def test_hard_maximum_stops_at_40_completed_iterations(tmp_path):
     state = _orchestrator(tmp_path, proposer, evaluator).run()
 
     assert state["status"] == "max_stopped"
-    assert len(state["iterations"]) == 40
+    assert len(state["iterations"]) == 50
     assert state["patience"]["consecutive_non_improving"] == 0
 
 
@@ -294,7 +294,7 @@ def test_previous_model_run_identity_is_not_resumable(tmp_path):
     state = orchestration.state()
 
     assert state["identity"]["config_sha256"] == (
-        "4ee121a12322871b2c95cec571a1a29142ea99b7f3ab3085a077fe27e4593c4b"
+        "de66f778339d8dd19520fbbf258b7292c0378b8f47fa5fc613db7d33ef4a621f"
     )
     state["identity"]["config_sha256"] = (
         "9cd31a36b1763de32ed3e3878176aee5d7521c645d8ca4bfe4e4f91dc5019517"
@@ -543,10 +543,10 @@ def test_mocked_complete_search_flow_resumes_from_atomic_checkpoint(tmp_path):
     state = resumed.run()
 
     assert state["status"] == "patience_stopped"
-    assert len(state["iterations"]) == 15
-    assert len(runner.calls) == len(evaluator.candidate_calls) == 15
+    assert len(state["iterations"]) == 38
+    assert len(runner.calls) == len(evaluator.candidate_calls) == 38
     assert len(evaluator.p0_calls) == 1
-    assert [iteration for iteration, _envelope in runner.calls] == list(range(1, 16))
+    assert [iteration for iteration, _envelope in runner.calls] == list(range(1, 39))
     assert sum(
         call["candidate_id"] == "candidate_001"
         for call in evaluator.candidate_calls

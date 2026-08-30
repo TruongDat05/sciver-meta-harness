@@ -222,8 +222,8 @@ def test_prepare_search_freeze_paired_final_resume_and_isolation(
         candidate_evaluator=evaluator.candidate,
     ).run()
     assert search["status"] == "patience_stopped"
-    assert len(search["iterations"]) == 15
-    assert len(proposer.calls) == 15
+    assert len(search["iterations"]) == 38
+    assert len(proposer.calls) == 38
     monkeypatch.setattr(
         subprocess,
         "run",
@@ -283,15 +283,15 @@ def test_prepare_search_freeze_paired_final_resume_and_isolation(
     )
 
     all_successful = [*interrupted.successful, *resumed.successful]
-    assert len(all_successful) == 2000
-    assert len({item["request_sha256"] for item in all_successful}) == 2000 if not p0_wins else 1000
-    assert receipt["logical_calls"] == 2000
+    assert len(all_successful) == 6000
+    assert len({item["request_sha256"] for item in all_successful}) == 6000
+    assert receipt["logical_calls"] == 6000
     assert final_evaluation_completion_receipt_path(repository_root, run_id).is_file()
     final_state = load_final_evaluation_state(
         repository_root / "workspace" / "meta_harness" / "full_search_v3" / run_id / "final" / "final_state.json"
     )
     assert final_state["status"] == "complete"
-    assert [len(item["completed_request_sha256"]) for item in final_state["variants"]] == [1000, 1000]
+    assert [len(item["completed_request_sha256"]) for item in final_state["variants"]] == [1000] * 6
     assert all(len(set(item["completed_request_sha256"])) == 1000 for item in final_state["variants"])
     assert frozen_path.read_bytes() == frozen_bytes
     assert (
@@ -300,7 +300,4 @@ def test_prepare_search_freeze_paired_final_resume_and_isolation(
     assert all("gold_label" not in item["messages"] for item in all_successful)
     persisted = canonical_json(final_state) + frozen_path.read_text(encoding="utf-8")
     assert all(value not in persisted for value in ("API_KEY", "API_URL", "Authorization", "base64"))
-    if p0_wins:
-        assert receipt["variants"][0]["prompt_sha256"] == receipt["variants"][1]["prompt_sha256"]
-    else:
-        assert receipt["variants"][0]["prompt_sha256"] != receipt["variants"][1]["prompt_sha256"]
+    assert len({item["prompt_sha256"] for item in receipt["variants"]}) == 6

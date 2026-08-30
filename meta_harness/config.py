@@ -30,9 +30,10 @@ EXPERIMENT_SEARCH_SIZE = 1000
 EXPERIMENT_FINAL_SIZE = 1000
 EXPERIMENT_SPLIT_SEED = 42
 EXPERIMENT_CANDIDATES_PER_ITERATION = 1
-EXPERIMENT_MIN_ITERATIONS = 15
-EXPERIMENT_MAX_ITERATIONS = 40
+EXPERIMENT_MIN_ITERATIONS = 38
+EXPERIMENT_MAX_ITERATIONS = 50
 EXPERIMENT_PATIENCE = 8
+EXPERIMENT_TOP_K = 5
 EXPERIMENT_PROPOSAL_ATTEMPTS = 3
 EXPERIMENT_SOLVER_MODEL = "gemma-4-26B-A4B-it"
 EXPERIMENT_SOLVER_TEMPERATURE = 0
@@ -63,6 +64,7 @@ class Config:
     min_iterations: int = EXPERIMENT_MIN_ITERATIONS
     max_iterations: int = EXPERIMENT_MAX_ITERATIONS
     patience: int = EXPERIMENT_PATIENCE
+    top_k: int = EXPERIMENT_TOP_K
     proposal_attempts: int = EXPERIMENT_PROPOSAL_ATTEMPTS
     solver_model: str = EXPERIMENT_SOLVER_MODEL
     solver_temperature: int = EXPERIMENT_SOLVER_TEMPERATURE
@@ -91,6 +93,7 @@ class Config:
             "min_iterations": EXPERIMENT_MIN_ITERATIONS,
             "max_iterations": EXPERIMENT_MAX_ITERATIONS,
             "patience": EXPERIMENT_PATIENCE,
+            "top_k": EXPERIMENT_TOP_K,
             "proposal_attempts": EXPERIMENT_PROPOSAL_ATTEMPTS,
             "solver_model": EXPERIMENT_SOLVER_MODEL,
             "solver_temperature": EXPERIMENT_SOLVER_TEMPERATURE,
@@ -118,6 +121,7 @@ class Config:
                 "min_iterations",
                 "max_iterations",
                 "patience",
+                "top_k",
                 "proposal_attempts",
                 "solver",
             },
@@ -140,6 +144,7 @@ class Config:
             min_iterations=values["min_iterations"],
             max_iterations=values["max_iterations"],
             patience=values["patience"],
+            top_k=values["top_k"],
             proposal_attempts=values["proposal_attempts"],
             solver_model=solver["model"],
             solver_temperature=solver["temperature"],
@@ -184,6 +189,7 @@ class Config:
             "min_iterations": self.min_iterations,
             "max_iterations": self.max_iterations,
             "patience": self.patience,
+            "top_k": self.top_k,
             "proposal_attempts": self.proposal_attempts,
             "solver": {
                 "model": self.solver_model,
@@ -265,6 +271,7 @@ __all__ = [
     "EXPERIMENT_SOLVER_TEMPERATURE",
     "EXPERIMENT_SOLVER_TOP_P",
     "EXPERIMENT_SPLIT_SEED",
+    "EXPERIMENT_TOP_K",
     "Config",
     "MetaHarnessConfigError",
     "SUPPORTED_PROPOSER_MODELS",

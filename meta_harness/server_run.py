@@ -37,7 +37,7 @@ from meta_harness.final_evaluation import (
     execute_final_evaluation,
     final_evaluation_completion_receipt_path,
     final_evaluation_state_path,
-    load_final_evaluation_completion_receipt,
+    load_bound_final_evaluation_completion_receipt,
     load_final_evaluation_state,
     preflight_final_evaluation,
 )
@@ -459,9 +459,16 @@ def freeze_server_run_winner(
         "protocol_id": artifact["schema_version"].split("_freeze_")[0],
         "run_id": artifact["run_id"],
         "prompt_variant": artifact["prompt_variant"],
-        "winner_id": artifact["winner"]["candidate_id"],
+        "top_k_count": len(artifact["top_k"]),
+        "top_k": [
+            {
+                "rank": entry["rank"],
+                "candidate_id": entry["candidate_id"],
+                "prompt_sha256": entry["prompt_sha256"],
+            }
+            for entry in artifact["top_k"]
+        ],
         "artifact_sha256": artifact["artifact_sha256"],
-        "prompt_sha256": artifact["hashes"]["prompt_sha256"],
         "frozen_winner_path": str(experiment_frozen_winner_path(repository_root, run_id)),
     }
 
@@ -548,19 +555,23 @@ def start_or_resume_server_run_final(
 def inspect_server_run_final_status(
     *, repository_root: str | Path, run_id: str
 ) -> dict[str, Any]:
-    """Inspect safe FINAL execution state or its create-once completion receipt."""
+    """Inspect safe FINAL execution state or its create-once completion receipt.
 
-    receipt_path = final_evaluation_completion_receipt_path(repository_root, run_id)
-    if receipt_path.is_file():
-        return _final_receipt_status(
-            load_final_evaluation_completion_receipt(receipt_path), run_id
-        )
+    A completion receipt is reported only after it is validated against the
+    trusted FINAL state identity; forged, incomplete, or missing state fails
+    closed.
+    """
+
     state_path = final_evaluation_state_path(repository_root, run_id)
     if not state_path.is_file():
         raise ServerError(
             "FINAL state is missing; freeze a terminal SEARCH winner and run FINAL preflight"
         )
     state = load_final_evaluation_state(state_path)
+    receipt_path = final_evaluation_completion_receipt_path(repository_root, run_id)
+    if receipt_path.is_file():
+        receipt = load_bound_final_evaluation_completion_receipt(receipt_path, state)
+        return _final_receipt_status(receipt, run_id)
     return {
         "operation": "final_status",
         "run_id": _run_id(run_id),
@@ -569,7 +580,7 @@ def inspect_server_run_final_status(
         "completed_logical_calls": sum(
             len(item["completed_request_sha256"]) for item in state["variants"]
         ),
-        "expected_logical_calls": 2000,
+        "expected_logical_calls": 6000,
     }
 
 
@@ -720,9 +731,9 @@ def _search_preflight_status(
         },
         "proposer_identity_sha256": _sha256_json(proposer_identity),
         "workload": {
-            "minimum_search_logical_calls": 16000,
-            "maximum_search_logical_calls": 41000,
-            "paired_final_logical_calls": 2000,
+            "minimum_search_logical_calls": 39000,
+            "maximum_search_logical_calls": 51000,
+            "paired_final_logical_calls": 6000,
         },
     }
 

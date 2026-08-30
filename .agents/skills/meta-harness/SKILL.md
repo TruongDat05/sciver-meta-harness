@@ -75,9 +75,9 @@ and the active run supplies the required inputs and output schema.
   at most three proposal attempts when output is invalid or duplicate; each
   rejected attempt is recorded before any solver call. Exhausted attempts are a
   durable proposal/infrastructure failure with a defined resume policy.
-- Complete at least 15 and at most 40 candidate iterations. Stop only after
+- Complete at least 38 and at most 50 candidate iterations. Stop only after
   eight consecutive completed iterations without a metric improvement, and
-  never apply early stopping before iteration 15.
+  never apply early stopping before iteration 38.
 
 ### Ranking and winner
 
@@ -101,20 +101,21 @@ searchable. The following remain frozen: canonical `cot`, all placeholders,
 task inputs, claim/context/caption interface, image count and order, answer
 format, parser, label vocabulary, evidence semantics, solver model, generation
 parameters, and solver-call behavior. `meta_cot` is only an additive
-registration of the frozen P* artifact; it must never replace or route through
-`cot`.
+registration of the frozen top-K candidates; it must never replace or route
+through `cot`.
 
 ### FINAL isolation and execution
 
 - FINAL records, IDs, labels, predictions, traces, metrics, paths, and
   availability signals are unavailable to the proposer and SEARCH
   orchestration. No raw FINAL data is exposed to SEARCH or the proposer.
-- Freeze the SEARCH winner offline before FINAL becomes executable. FINAL is a
-  separate, explicit execution stage; no prompt optimization is allowed after
-  freeze.
+- Freeze the offline top-5 SEARCH candidates (P0 kept separate) before FINAL is
+  executable. FINAL is a separate, explicit execution stage; no prompt
+  optimization is allowed after freeze.
 - Evaluate frozen canonical P0 exactly once on all 1,000 immutable FINAL IDs,
-  and evaluate frozen P* exactly once on those identical IDs. FINAL results
-  cannot alter prompts, SEARCH state, ranking, patience, or the winner.
+  and evaluate each of the 5 frozen candidates exactly once on those identical
+  IDs. FINAL results cannot alter prompts, SEARCH state, ranking, patience, or
+  the frozen top-K selection.
 - An interruption may resume missing work only under the same durable execution
   identity. Completed FINAL calls must not be redispatched.
 - FINAL checkpoints and completion receipts are run-local and isolated from
@@ -126,19 +127,19 @@ Maximum logical SEARCH solver evaluations are:
 
 ```text
 baseline:                 1000
-40 candidate iterations: 40 * 1000 = 40,000
-maximum SEARCH total:     41,000
+50 candidate iterations: 50 * 1000 = 50,000
+maximum SEARCH total:     51,000
 ```
 
 FINAL logical solver evaluations are:
 
 ```text
-P0:          1,000
-P*:          1,000
-FINAL total: 2,000
+P0:              1,000
+5 frozen:        5 * 1,000 = 5,000
+FINAL total:     6,000
 ```
 
-The maximum full 40-iteration SEARCH plus FINAL workload is 43,000 logical
+The maximum full 50-iteration SEARCH plus FINAL workload is 57,000 logical
 solver evaluations. Transport retries are excluded from logical counts.
 
 Before an opt-in live execution, estimate solver calls, proposer calls, tokens,
@@ -236,10 +237,11 @@ and resume only compatible durable state. Classify remote failures as
 infrastructure failures, never as model errors. Do not launch duplicate
 processes or repeat completed samples, candidates, stages, or charged calls.
 
-For FINAL, confirm the offline-frozen winner and all experiment-defining fields
-before the explicit command. Execute only the paired P0/P* work, resume only
-missing work, and report paired metrics, parse coverage, failure rates, calls,
-tokens, and wall time without using the results to tune the winner.
+For FINAL, confirm the offline-frozen top-K selection and all experiment-defining
+fields before the explicit command. Execute only the P0 + top-5 work, resume
+only missing work, and report per-variant metrics, parse coverage, failure
+rates, calls, tokens, and wall time without using the results to tune the
+frozen selection.
 
 Without explicit authorization, do not make live calls, launch an experiment or
 FINAL evaluation, access credentials, push or publish, modify external
