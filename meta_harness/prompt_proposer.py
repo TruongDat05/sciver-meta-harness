@@ -41,7 +41,7 @@ from meta_harness.prompt_family import (
 
 
 EXPERIMENT_PROPOSER_SCHEMA_VERSION = 2
-EXPERIMENT_PROPOSER_INSTRUCTION_VERSION = "sciver_full_search_v3_proposer_v2"
+EXPERIMENT_PROPOSER_INSTRUCTION_VERSION = "sciver_full_search_v3_proposer_v3"
 EXPERIMENT_MAX_PROPOSAL_ATTEMPTS = EXPERIMENT_PROPOSAL_ATTEMPTS
 DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_MAX_INPUT_BYTES = 256_000
@@ -71,6 +71,17 @@ _SENSITIVE_TEXT = re.compile(
     r"\braw[_ -]?(?:trace|response)\b|"
     r"\b(?:api[_ -]?key|api[_ -]?url|authorization|bearer|secret|credential)\b|"
     r"https?://|\bbase64\b|data:image/|(?:^|[\\/])[^\\s]*\\.(?:jsonl?|csv|parquet)(?:$|\\s))",
+    re.IGNORECASE,
+)
+_FORBIDDEN_CANDIDATE_METADATA_TEXT = re.compile(
+    r"(?:(?<![A-Za-z0-9])final[_ -]?(?:records?|paths?|availability|memberships?|"
+    r"results?|traces?|metrics?|ids?)\b|\bgold[_ -]?label\b|\bground[_ -]?truth\b|"
+    r"\b(?:sample|example|request|paper)[ _-]?id\b|"
+    r"\braw[_ -]?(?:trace|response)\b|"
+    r"\b(?:api[_ -]?key|api[_ -]?url|authorization|bearer|secret|credential)\b|"
+    r"\b(?:api|private|server|remote)[ _-]?endpoints?\b|"
+    r"\bendpoints?[ _-]?(?:url|uri)\b|"
+    r"https?://|\bbase64\b|data:image/|\.(?:jsonl?|csv|parquet)\b)",
     re.IGNORECASE,
 )
 _SAFE_FAILURE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -109,7 +120,8 @@ REJECTION_TEMPLATE_KEYS = "template_keys"
 REJECTION_PLACEHOLDER = "placeholder_contract"
 REJECTION_UNCHANGED = "unchanged_template"
 REJECTION_ANSWER = "answer_contract"
-REJECTION_PROHIBITED = "prohibited_content"
+REJECTION_PROHIBITED_METADATA = "prohibited_metadata_content"
+REJECTION_PROHIBITED_TEMPLATE = "prohibited_template_content"
 _RECEIPT_EXACT_FIELDS = frozenset(
     {
         "schema_version",
@@ -140,67 +152,77 @@ _REJECTION_CATEGORIES = frozenset(
         REJECTION_PLACEHOLDER,
         REJECTION_UNCHANGED,
         REJECTION_ANSWER,
-        REJECTION_PROHIBITED,
+        REJECTION_PROHIBITED_METADATA,
+        REJECTION_PROHIBITED_TEMPLATE,
     }
 )
 _REJECTION_FEEDBACK = {
     REJECTION_DUPLICATE_ID: (
-        "Rejected as duplicate_candidate_id: this candidate_id is already used "
+        "this candidate_id is already used "
         "by an earlier proposal. Choose a new, globally unique candidate_id."
     ),
     REJECTION_DUPLICATE_CONTENT: (
-        "Rejected as duplicate_prompt_content: the assembled four template "
+        "the assembled four template "
         "texts are identical to an earlier proposal. Make this candidate "
         "materially distinct in template text and mechanism."
     ),
     REJECTION_TOP_LEVEL: (
-        "Rejected as top_level_structure: the response is not a single JSON "
+        "the response is not a single JSON "
         "object with exactly the keys 'iteration' and 'candidate', or it "
         "contains extra or missing fields. Return only the exact schema object "
         "with no enclosures, commentary, or trailing prose."
     ),
     REJECTION_ITERATION: (
-        "Rejected as iteration: the response did not echo the requested "
+        "the response did not echo the requested "
         "iteration number. Set 'iteration' to the value supplied in the input."
     ),
     REJECTION_PARENT: (
-        "Rejected as parent: the candidate's parent_id does not match the "
+        "the candidate's parent_id does not match the "
         "parent supplied for this proposal. Keep parent_id exactly as given."
     ),
     REJECTION_METADATA: (
-        "Rejected as metadata: the candidate_id, hypothesis, or expected_tradeoff "
+        "the candidate_id, hypothesis, or expected_tradeoff "
         "is missing, malformed, or contains prohibited data. Provide a valid "
         "safe candidate_id and non-empty hypothesis and expected_tradeoff."
     ),
     REJECTION_TEMPLATE_KEYS: (
-        "Rejected as template_keys: the candidate must contain exactly the four "
+        "the candidate must contain exactly the four "
         "templates direct, analytical, parallel, and sequential, with no missing "
         "or extra keys."
     ),
     REJECTION_PLACEHOLDER: (
-        "Rejected as placeholder_contract: a template violated the frozen "
+        "a template violated the frozen "
         "placeholder contract. direct and analytical must contain exactly "
         "$claim, $context, $caption; parallel and sequential must contain "
         "exactly $claim, $context, $caption1, $caption2. Preserve them exactly "
         "and do not change template syntax."
     ),
     REJECTION_UNCHANGED: (
-        "Rejected as unchanged_template: every template must differ from its "
+        "every template must differ from its "
         "supplied parent. Change each of direct, analytical, parallel, and "
         "sequential."
     ),
     REJECTION_ANSWER: (
-        "Rejected as answer_contract: a template changed the frozen output "
+        "a template changed the frozen output "
         "contract. Preserve the literal Answer: $$ANSWER format and both the "
         "yes and the no label vocabulary in every template."
     ),
-    REJECTION_PROHIBITED: (
-        "Rejected as prohibited_content: a template or candidate text contains "
+    REJECTION_PROHIBITED_METADATA: (
+        "candidate metadata contains "
+        "protected record-specific data that must never be model-visible "
+        "(ground-truth labels, sample/paper IDs, raw responses, secrets, "
+        "endpoints, base64, data URLs, or FINAL material). Remove it; abstract "
+        "evaluation terms such as label, prediction, and classification are "
+        "allowed when they do not disclose protected data."
+    ),
+    REJECTION_PROHIBITED_TEMPLATE: (
+        "a candidate template contains "
         "data that must never be model-visible (ground-truth labels, sample IDs, "
-        "raw responses, secrets, endpoints, base64, or FINAL material). Remove it."
+        "raw responses, secrets, endpoints, base64, data URLs, or FINAL "
+        "material). Remove it."
     ),
     REJECTION_INVALID_OUTPUT: (
-        "Rejected as invalid_output: the response did not match the exact "
+        "the response did not match the exact "
         "candidate JSON. Return only the top-level object {\"iteration\": <int>, "
         "\"candidate\": {...}} with exactly the required fields, valid JSON, "
         "and no enclosures, commentary, or trailing prose."
@@ -825,7 +847,7 @@ def _validate_candidate_templates(
         template = templates[method]
         if _FORBIDDEN_TEMPLATE_TEXT.search(template):
             _reject(
-                REJECTION_PROHIBITED,
+                REJECTION_PROHIBITED_TEMPLATE,
                 "candidate template contains prohibited data",
             )
         if template == parent_templates[method]:
@@ -928,7 +950,7 @@ def _normalize_lineage(value: Sequence[Mapping[str, Any]]) -> list[dict[str, Any
 def _normalize_lineage_text(field: str, value: Any) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 2_000:
         raise ValueError(f"lineage {field} must be bounded non-empty text")
-    if _SENSITIVE_TEXT.search(value):
+    if _FORBIDDEN_CANDIDATE_METADATA_TEXT.search(value):
         raise ValueError(f"lineage {field} contains prohibited data")
     return value.strip()
 
@@ -1031,22 +1053,27 @@ def _build_prompt(
 
 
 def _ordered_feedback(categories: Sequence[str]) -> list[str]:
-    """Map ordered rejection categories to deduplicated feedback text.
+    """Map ordered rejection categories to occurrence-aware feedback text.
 
-    The same category recurring on different attempts produces one identical
-    feedback line placed at its first occurrence, so write and resume paths can
-    reconstruct an identical attempt prompt deterministically.
+    Preserve first-occurrence ordering while counting each category's total
+    occurrences. Emit one feedback line per distinct category carrying its
+    occurrence count, so repeated identical rejections yield different attempt
+    prompt bytes while remaining deterministically reconstructable from the
+    ordered durable rejection categories alone.
     """
-    seen: set[str] = set()
-    messages: list[str] = []
+    counts: dict[str, int] = {}
+    order: list[str] = []
     for category in categories:
-        if category in seen:
+        if category not in _REJECTION_FEEDBACK:
             continue
-        message = _REJECTION_FEEDBACK.get(category)
-        if message is not None:
-            seen.add(category)
-            messages.append(message)
-    return messages
+        if category not in counts:
+            order.append(category)
+        counts[category] = counts.get(category, 0) + 1
+    return [
+        f"Rejected as {category} (occurrences: {counts[category]}): "
+        f"{_REJECTION_FEEDBACK[category]}"
+        for category in order
+    ]
 
 
 def _rejected_feedback(directory: Path) -> list[str]:
@@ -1126,9 +1153,10 @@ def _verify_attempt_prompt_hash(
 ) -> None:
     """Reconstruct the attempt prompt and bind it to the stored hash.
 
-    The reconstructed prompt is the base envelope plus the deduplicated durable
-    rejection feedback that preceded this attempt. A mismatch means the stored
-    prompt or its feedback chain was altered, so resume/recovery fails closed.
+    The reconstructed prompt is the base envelope plus the occurrence-aware
+    durable rejection feedback that preceded this attempt. A mismatch means the
+    stored prompt or its feedback chain was altered, so resume/recovery fails
+    closed.
     """
     feedback_before = _ordered_feedback(categories_before)
     prompt = (
@@ -1454,8 +1482,10 @@ def _safe_candidate_text(
         _reject(category, f"{field} must be non-empty text")
     if len(value) > 2_000:
         _reject(category, f"{field} must be bounded text")
-    if _SENSITIVE_TEXT.search(value):
-        _reject(REJECTION_PROHIBITED, f"{field} contains prohibited data")
+    if _FORBIDDEN_CANDIDATE_METADATA_TEXT.search(value):
+        _reject(
+            REJECTION_PROHIBITED_METADATA, f"{field} contains prohibited data"
+        )
     return value.strip()
 
 

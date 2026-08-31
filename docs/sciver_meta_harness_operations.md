@@ -20,7 +20,8 @@ private local dataset path.
   disjointness cannot be met.
 - Solver: fixed `gemma-4-26B-A4B-it` with `temperature=0`, `top_p=1`, seed 42,
   `n=1`, non-streaming, `max_tokens=8192` (override with `SCIVER_SOLVER_MAX_TOKENS`).
-- Proposer: `gpt-5.6-sol` with reasoning effort `high`.
+- Proposer: `gpt-5.6-sol` with reasoning effort `high` (proposer instructions
+  identity `sciver_full_search_v3_proposer_v3`; proposal receipt schema v2).
 - Evaluation: canonical P0 plus one valid prompt candidate per SEARCH iteration
   on the same complete 1,000-record SEARCH split; 38–50 iterations, patience 8,
   at most three proposal attempts per iteration. Ranking is SEARCH Macro-F1
@@ -202,6 +203,63 @@ interrupt, send one `Ctrl-C`, wait for return, inspect state, then invoke the
 same stage with the same checkout, run ID, split, and compatible identity. Do
 not delete locks, caches, checkpoints, receipts, or immutable artifacts.
 Incompatible resume state fails closed.
+
+## Proposal validation and rejection diagnosis
+
+SEARCH proposes one candidate per iteration with at most three validation
+attempts. Each invalid or duplicate proposal is persisted as a rejected attempt
+receipt with a safe, typed category. After three rejections the run reaches the
+terminal state:
+
+```text
+"status": "proposal_exhausted"
+"stop_reason": "proposal_attempts_exhausted"
+```
+
+`proposal_exhausted` means three proposer validation rejections, **not** a
+solver/API transport failure and **not** metric patience. It is an unsuccessful
+terminal state; it is never eligible for winner freeze or a FINAL run, and
+resuming it dispatches no proposer or solver work.
+
+Two rejection categories identify the failing validation boundary:
+
+- `prohibited_metadata_content` — the candidate `hypothesis` or
+  `expected_tradeoff` contained protected record-specific material.
+- `prohibited_template_content` — one of the four template texts contained
+  protected material.
+
+Rejected raw candidate text, matched sensitive text, and rejected attempt
+feedback are **not** persisted, so the exact matched token cannot be recovered
+from receipts (this is intentional and fail-closed). Repeated identical
+rejections produce deterministically distinct retry prompts whose feedback
+includes the occurrence count and is reconstructable from the durable receipt
+categories alone.
+
+### Privacy boundary
+
+Abstract evaluation vocabulary — `label`, `prediction`, and `classification`
+(and their obvious variants) — is allowed **only** in candidate metadata
+(`hypothesis` / `expected_tradeoff`) and in lineage round-tripping when it does
+not disclose protected data. Protected record-specific material (ground-truth
+labels, sample/paper IDs, raw responses/traces, credentials, API/private/server/
+remote endpoints and endpoint URLs/URIs, bare HTTP(S) URLs, base64/data URLs,
+encoded file paths, and FINAL record/path/membership/result material) remains
+forbidden everywhere. A bare `endpoint` with no API/private/server/remote
+qualifier and no URL is allowed as abstract evaluation vocabulary, and
+standalone `final` used as an ordinary adjective (for example "the final
+decision") is allowed, while a `final` qualifier on protected record, path,
+availability, membership, result, trace, metric, or ID references is not. Input
+sanitization for failure summaries and external proposer input stays at least
+as strict as before.
+
+### Immutable runs
+
+Do not delete receipts or edit orchestration state to restart the same run.
+A changed proposer instruction identity makes earlier proposal chains
+incompatible and fail closed: recovery from a `_proposer_v3` run requires a
+freshly prepared run ID (for example `run03`), and any previously terminal run
+(such as `run02`) remains immutable and is not resumed under changed
+instructions.
 
 ## Safety
 

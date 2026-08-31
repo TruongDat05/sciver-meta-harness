@@ -169,10 +169,45 @@ def test_invalid_exhausted_proposal_has_zero_candidate_evaluations(tmp_path):
     state = _orchestrator(tmp_path, proposer, evaluator).run()
 
     assert state["status"] == "proposal_exhausted"
+    assert state["stop_reason"] == "proposal_attempts_exhausted"
     assert proposer.calls == 1
     assert proposer.attempts == 3
     assert len(evaluator.p0_calls) == 1
     assert evaluator.candidate_calls == []
+
+    resumed_proposer = ExhaustedProposer()
+    resumed_evaluator = FakeEvaluator()
+    resumed = _orchestrator(tmp_path, resumed_proposer, resumed_evaluator).run()
+
+    assert resumed["status"] == "proposal_exhausted"
+    assert resumed["stop_reason"] == "proposal_attempts_exhausted"
+    assert resumed_proposer.calls == 0
+    assert resumed_proposer.attempts == 0
+    assert resumed_evaluator.p0_calls == []
+    assert resumed_evaluator.candidate_calls == []
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    [None, "unknown_reason"],
+)
+def test_proposal_exhausted_state_rejects_invalid_stop_reason(tmp_path, stop_reason):
+    class ExhaustedProposer:
+        def propose(self, **_kwargs):
+            raise ProposalExhausted("three invalid attempts")
+
+    _orchestrator(tmp_path, ExhaustedProposer(), FakeEvaluator()).run()
+
+    state_path = (
+        tmp_path / "workspace" / "meta_harness" / "full_search_v3" / "offline_run" / "orchestration_state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["status"] == "proposal_exhausted"
+    state["stop_reason"] = stop_reason
+    state_path.write_text(canonical_json(state), encoding="utf-8")
+
+    with pytest.raises(ResumeError, match="inconsistent"):
+        _orchestrator(tmp_path, ExhaustedProposer(), FakeEvaluator()).run()
 
 
 def test_no_early_stop_before_38_and_patience_stops_at_8_after_minimum(tmp_path):

@@ -23,7 +23,11 @@ from meta_harness.config import (
     DEFAULT_PROPOSER_REASONING_EFFORT,
     EXPERIMENT_PROPOSAL_ATTEMPTS,
 )
-from meta_harness.prompt_family import canonical_baseline_sources, template_source_sha256
+from meta_harness.prompt_family import (
+    canonical_baseline_sources,
+    canonical_json,
+    template_source_sha256,
+)
 
 
 def _templates(suffix: str = "") -> dict[str, str]:
@@ -134,6 +138,82 @@ def test_valid_one_candidate_output_is_accepted_and_receipted(tmp_path):
     assert command[:2] == ["codex", "exec"]
     assert command[command.index("--sandbox") + 1] == "danger-full-access"
     assert kwargs["shell"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("hypothesis", "A consistency check will reduce prediction errors."),
+        ("hypothesis", "A calibrated label decision will improve consistency."),
+        ("expected_tradeoff", "The classification check may reduce recall."),
+    ],
+)
+def test_candidate_metadata_allows_abstract_evaluation_vocabulary(
+    tmp_path, field, text
+):
+    payload = _payload()
+    payload["candidate"][field] = text
+    result = _propose(tmp_path, SerializedRunner([payload]))
+    assert getattr(result.candidate, field) == text
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("hypothesis", "The final decision may reduce recall."),
+        (
+            "expected_tradeoff",
+            "A final classification check may reduce prediction errors.",
+        ),
+    ],
+)
+def test_candidate_metadata_allows_benign_final_adjective(tmp_path, field, text):
+    payload = _payload()
+    payload["candidate"][field] = text
+    result = _propose(tmp_path, SerializedRunner([payload]))
+    assert getattr(result.candidate, field) == text
+
+
+def _attempt_receipt(tmp_path, attempt):
+    path = (
+        tmp_path
+        / "workspace"
+        / "meta_harness"
+        / "full_search_v3"
+        / "offline_v3"
+        / "proposals"
+        / "iteration_0001"
+        / f"attempt_{attempt:05d}.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use the ground-truth label.",
+        "Inspect the sample ID.",
+        "Read the raw response.",
+        "Use API_KEY from the environment.",
+        "Fetch https://invalid.example/data.",
+        "Compare against FINAL results.",
+        "Decode data:image/png;base64,AAAA.",
+        "Read predictions.jsonl.",
+        "Use the private endpoint.",
+        "Use the API endpoint.",
+        "Read the endpoint URL.",
+    ],
+)
+def test_candidate_metadata_rejects_protected_content(tmp_path, text):
+    payload = _payload()
+    payload["candidate"]["hypothesis"] = text
+    runner = SerializedRunner([payload, payload, payload])
+    with pytest.raises(ProposalExhausted):
+        _propose(tmp_path, runner)
+    receipt = _attempt_receipt(tmp_path, 3)
+    assert receipt["category"] == "prohibited_metadata_content"
+    assert receipt["candidate"] is None
+    assert text not in canonical_json(receipt)
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra"])
@@ -378,6 +458,79 @@ def test_lineage_metrics_and_deltas_appear_in_prompt_history(tmp_path):
     assert "-0.033" in serialized
 
 
+def test_lineage_metadata_round_trips_through_proposer_envelope():
+    envelope = build_prompt_proposer_input(
+        iteration=1,
+        parent_id="baseline_cot",
+        parent_templates=canonical_baseline_sources(),
+        aggregate_search_metrics={},
+        lineage=[
+            {
+                "candidate_id": "c1",
+                "parent_id": "baseline_cot",
+                "source_sha256": "a" * 64,
+                "hypothesis": "Independent checks reduce prediction errors.",
+                "expected_tradeoff": "label decisions may trade off recall.",
+            }
+        ],
+        representative_search_failures=[],
+    )
+    entry = envelope["lineage"][0]
+    assert "prediction errors" in entry["hypothesis"]
+    assert "label decisions" in entry["expected_tradeoff"]
+
+
+def test_lineage_metadata_round_trips_benign_final_adjective():
+    envelope = build_prompt_proposer_input(
+        iteration=1,
+        parent_id="baseline_cot",
+        parent_templates=canonical_baseline_sources(),
+        aggregate_search_metrics={},
+        lineage=[
+            {
+                "candidate_id": "c1",
+                "parent_id": "baseline_cot",
+                "source_sha256": "a" * 64,
+                "hypothesis": "The final decision may reduce recall.",
+                "expected_tradeoff": (
+                    "A final classification check may reduce prediction errors."
+                ),
+            }
+        ],
+        representative_search_failures=[],
+    )
+    entry = envelope["lineage"][0]
+    assert "final decision" in entry["hypothesis"]
+    assert "final classification" in entry["expected_tradeoff"]
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("hypothesis", "Use the ground-truth label."),
+        ("expected_tradeoff", "Compare against FINAL results."),
+    ],
+)
+def test_lineage_metadata_rejects_protected_content(field, text):
+    lineage = [
+        {
+            "candidate_id": "c1",
+            "parent_id": "baseline_cot",
+            "source_sha256": "a" * 64,
+            field: text,
+        }
+    ]
+    with pytest.raises(ValueError, match="prohibited"):
+        build_prompt_proposer_input(
+            iteration=1,
+            parent_id="baseline_cot",
+            parent_templates=canonical_baseline_sources(),
+            aggregate_search_metrics={},
+            lineage=lineage,
+            representative_search_failures=[],
+        )
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["duplicate_id", "duplicate_content", "placeholder"],
@@ -486,12 +639,69 @@ def test_resume_replays_durable_rejection_feedback(tmp_path):
     assert b"invalid_output" in resumed_inputs[0]
 
 
+def test_repeated_rejection_feedback_changes_each_attempt_prompt(tmp_path):
+    payload = _payload()
+    payload["candidate"]["hypothesis"] = "Use the ground-truth label."
+    runner = SerializedRunner([payload, payload, payload])
+    with pytest.raises(ProposalExhausted):
+        _propose(tmp_path, runner)
+    assert len(runner.inputs) == 3
+    assert runner.inputs[0] != runner.inputs[1]
+    assert runner.inputs[1] != runner.inputs[2]
+    assert b"occurrences: 1" in runner.inputs[1]
+    assert b"occurrences: 2" in runner.inputs[2]
+
+
+def test_recover_repeated_category_feedback_is_distinct_and_fails_closed_on_tamper(tmp_path):
+    envelope = _recovery_envelope()
+    records = _receipt_chain(
+        envelope,
+        prior=["rejected", "rejected"],
+        rejected_category="prohibited_metadata_content",
+    )
+
+    assert records[1]["attempt_prompt_sha256"] != records[2]["attempt_prompt_sha256"]
+
+    result = _recover(tmp_path, envelope, records)
+    assert result is not None
+    assert result.attempt == 3
+
+    def tamper(record, index):
+        if index == 2:
+            record["attempt_prompt_sha256"] = "f" * 64
+
+    with pytest.raises(ProposerInfrastructureError, match="prompt identity"):
+        _recover(tmp_path, envelope, records, mutate=tamper)
+
+
 def test_proposer_receipt_schema_and_instruction_versions_are_current():
     assert pp.EXPERIMENT_PROPOSER_SCHEMA_VERSION == 2
     assert (
         pp.EXPERIMENT_PROPOSER_INSTRUCTION_VERSION
-        == "sciver_full_search_v3_proposer_v2"
+        == "sciver_full_search_v3_proposer_v3"
     )
+
+
+def test_legacy_v2_receipt_chain_fails_closed(tmp_path):
+    envelope = _recovery_envelope()
+    records = _receipt_chain(envelope)
+    for record in records:
+        record["instruction_version"] = "sciver_full_search_v3_proposer_v2"
+
+    with pytest.raises(ProposerInfrastructureError, match="incompatible"):
+        _recover(tmp_path, envelope, records)
+
+
+def test_v3_receipt_with_legacy_prohibited_category_fails_closed(tmp_path):
+    envelope = _recovery_envelope()
+    records = _receipt_chain(
+        envelope,
+        prior=["rejected"],
+        rejected_category="prohibited_content",
+    )
+
+    with pytest.raises(ProposerInfrastructureError, match="incompatible"):
+        _recover(tmp_path, envelope, records)
 
 
 def test_attempt_prompt_hash_is_persisted_and_matches_sent_prompt(tmp_path):
@@ -619,7 +829,7 @@ _REJECTION_CODE_BY_KIND = {
     "placeholder": "placeholder_contract",
     "unchanged": "unchanged_template",
     "answer": "answer_contract",
-    "prohibited": "prohibited_content",
+    "prohibited": "prohibited_template_content",
     "duplicate_id": "duplicate_candidate_id",
     "duplicate_content": "duplicate_prompt_content",
 }
@@ -749,7 +959,7 @@ def _recovery_candidate(parent="baseline_cot", **overrides):
     return candidate
 
 
-def _receipt_chain(envelope, *, prior=(), candidate_factory=None, parent="baseline_cot"):
+def _receipt_chain(envelope, *, prior=(), candidate_factory=None, parent="baseline_cot", rejected_category="invalid_output"):
     base = pp._build_prompt(envelope)
     base_hash = hashlib.sha256(base.encode("utf-8")).hexdigest()
     spec = list(prior) + ["accepted"]
@@ -762,7 +972,7 @@ def _receipt_chain(envelope, *, prior=(), candidate_factory=None, parent="baseli
         category = None
         candidate = None
         if status == "rejected":
-            category = "invalid_output"
+            category = rejected_category
         elif status == "infrastructure_failure":
             category = "subprocess"
         elif status == "accepted":

@@ -307,6 +307,7 @@ class Orchestrator:
             self._persist("proposal_pending")
         if entry["status"] == "proposal_exhausted":
             self._state["status"] = "proposal_exhausted"
+            self._state["stop_reason"] = "proposal_attempts_exhausted"
             self._persist("proposal_exhausted")
             return False
         if entry["status"] == "proposal_pending":
@@ -435,6 +436,7 @@ class Orchestrator:
             assert entry is not None
             entry["status"] = "proposal_exhausted"
             self._state["status"] = "proposal_exhausted"
+            self._state["stop_reason"] = "proposal_attempts_exhausted"
             self._persist("proposal_exhausted")
             return None
 
@@ -764,6 +766,9 @@ def _validate_state_shape(state: Mapping[str, Any]) -> None:
             _candidate_from_state(entry["candidate"])
         if entry["status"] == "complete" and not isinstance(entry["report"], Mapping):
             raise ResumeError("completed iteration lacks a report")
+    if state["status"] == "proposal_exhausted":
+        if state["stop_reason"] != "proposal_attempts_exhausted":
+            raise ResumeError("Meta-Harness orchestration state is inconsistent")
     PatienceState(**state["patience"])
 
 
