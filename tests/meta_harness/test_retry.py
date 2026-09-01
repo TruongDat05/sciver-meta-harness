@@ -149,6 +149,92 @@ def test_only_configured_5xx_statuses_are_retryable():
     ).category is FailureCategory.HTTP_5XX_PERMANENT
 
 
+@pytest.mark.parametrize("status", [520, 521, 522, 523, 524, 527])
+def test_transient_origin_5xx_statuses_are_retryable_by_default(status):
+    classification = classify_solver_failure(
+        _http_error(ServerError, status), SolverRetryPolicy()
+    )
+
+    assert classification.category is FailureCategory.HTTP_5XX_RETRYABLE
+    assert classification.retryable is True
+
+
+@pytest.mark.parametrize("status", [520, 524])
+def test_transient_origin_5xx_recovers_on_retry(status):
+    solver = SequenceSolver(
+        [_http_error(ServerError, status), _http_error(ServerError, status), SolverResult("Answer: yes")]
+    )
+    sleeper = Mock()
+    ticks = iter((10.0, 12.5))
+
+    result = execute_solver_request_with_retry(
+        solver,
+        _request(),
+        policy=SolverRetryPolicy(
+            maximum_attempts=3,
+            initial_backoff_seconds=1,
+            maximum_backoff_seconds=4,
+        ),
+        sleeper=sleeper,
+        clock=lambda: next(ticks),
+    )
+
+    assert solver.calls == 3
+    assert result is not None
+
+
+@pytest.mark.parametrize(
+    "status", [500, 506, 507, 508, 510, 511, 525, 526, 527, 599]
+)
+def test_any_five_xx_status_is_retryable_by_default(status):
+    classification = classify_solver_failure(
+        _http_error(ServerError, status), SolverRetryPolicy()
+    )
+
+    assert classification.category is FailureCategory.HTTP_5XX_RETRYABLE
+    assert classification.retryable is True
+
+
+@pytest.mark.parametrize("status", [501, 505])
+def test_permanent_five_xx_statuses_are_not_retryable_by_default(status):
+    classification = classify_solver_failure(
+        _http_error(ServerError, status), SolverRetryPolicy()
+    )
+
+    assert classification.category is FailureCategory.HTTP_5XX_PERMANENT
+    assert classification.retryable is False
+
+
+def test_default_retryable_set_is_every_five_xx_except_permanent():
+    from meta_harness.retry import DEFAULT_PERMANENT_5XX, DEFAULT_RETRYABLE_5XX
+
+    assert DEFAULT_PERMANENT_5XX == frozenset({501, 505})
+    assert DEFAULT_RETRYABLE_5XX == frozenset(range(500, 600)) - {501, 505}
+
+
+@pytest.mark.parametrize("status", [520, 525, 527, 599])
+def test_persistent_five_xx_surfaces_exhausted_after_retries(status):
+    solver = SequenceSolver([_http_error(ServerError, status)] * 4)
+    sleeper = Mock()
+
+    with pytest.raises(SolverExecutionFailure) as raised:
+        execute_solver_request_with_retry(
+            solver,
+            _request(),
+            policy=SolverRetryPolicy(
+                maximum_attempts=4,
+                initial_backoff_seconds=1,
+                maximum_backoff_seconds=4,
+            ),
+            sleeper=sleeper,
+            clock=lambda: 10.0,
+        )
+
+    assert solver.calls == 4
+    assert raised.value.metadata.exhausted is True
+    assert raised.value.metadata.category is FailureCategory.HTTP_5XX_RETRYABLE
+
+
 @pytest.mark.parametrize(
     "error",
     [

@@ -32,7 +32,8 @@ from model_inference.remote_client import (
 )
 
 
-DEFAULT_RETRYABLE_5XX = frozenset({500, 502, 503, 504})
+DEFAULT_PERMANENT_5XX = frozenset({501, 505})
+DEFAULT_RETRYABLE_5XX = frozenset(range(500, 600)) - DEFAULT_PERMANENT_5XX
 MAXIMUM_TRANSPORT_ATTEMPTS = 10
 
 
@@ -334,6 +335,7 @@ def _safe_type_name(error: BaseException) -> str:
 
 
 __all__ = [
+    "DEFAULT_PERMANENT_5XX",
     "DEFAULT_RETRYABLE_5XX",
     "FailureCategory",
     "FailureClassification",
